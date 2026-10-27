@@ -31,7 +31,9 @@ impl Rgb {
 
     /// RGB565 as sent on the wire: `rrrrrggg gggbbbbb`.
     pub fn to_565(self) -> u16 {
-        ((self.r as u16 & 0xf8) << 8) | ((self.g as u16 & 0xfc) << 3) | ((self.b as u16 & 0xf8) >> 3)
+        ((self.r as u16 & 0xf8) << 8)
+            | ((self.g as u16 & 0xfc) << 3)
+            | ((self.b as u16 & 0xf8) >> 3)
     }
 
     pub fn from_565(v: u16) -> Rgb {
@@ -159,7 +161,7 @@ mod tests {
         let r = f.to_v3_report();
         assert_eq!(r.len(), V3_REPORT_LEN);
         assert_eq!(&r[..4], &[5, 0xD1, 0xDA, 11]);
-        let off = V3_DATA_OFFSET + (1 * COLS + 2) * 2;
+        let off = V3_DATA_OFFSET + (COLS + 2) * 2;
         assert_eq!(&r[off..off + 2], &0xf800u16.to_le_bytes());
     }
 

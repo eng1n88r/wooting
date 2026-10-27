@@ -49,7 +49,7 @@ pub struct KeyboardSettings {
 
 impl KeyboardSettings {
     pub fn from_pb(p: &pb::KeyboardProfile) -> KeyboardSettings {
-        let d = p.payload.clone().unwrap_or_default();
+        let d = p.payload.unwrap_or_default();
         let g = |v: Option<u32>| v.unwrap_or(0);
         KeyboardSettings {
             actuation_mm: code_to_mm(g(d.actuation)),
@@ -188,7 +188,11 @@ impl Keyboard {
         let d = r.data();
         Ok(match d {
             [a, b, c, ..] => format!("{a}.{b}.{c}"),
-            _ => d.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("."),
+            _ => d
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join("."),
         })
     }
 
@@ -209,7 +213,10 @@ impl Keyboard {
 
     pub fn active_profile(&self) -> Result<u8> {
         let r = self.cmd(Command::GetCurrentKeyboardProfileIndex, [0; 4])?;
-        r.data().first().copied().ok_or_else(|| Error::Other("empty profile index".into()))
+        r.data()
+            .first()
+            .copied()
+            .ok_or_else(|| Error::Other("empty profile index".into()))
     }
 
     pub fn profile_metadata(&self, slot: u8) -> Result<Option<pb::ProfileMetadata>> {
@@ -224,12 +231,18 @@ impl Keyboard {
         let active = self.active_profile().ok();
         let mut out = Vec::new();
         for slot in 0..MAX_PROFILE_SLOTS {
-            let Some(m) = self.profile_metadata(slot)? else { break };
+            let Some(m) = self.profile_metadata(slot)? else {
+                break;
+            };
             let c = m.color.unwrap_or_default();
             out.push(ProfileInfo {
                 slot,
                 name: m.name,
-                color: Rgb::new(c.r.unwrap_or(0) as u8, c.g.unwrap_or(0) as u8, c.b.unwrap_or(0) as u8),
+                color: Rgb::new(
+                    c.r.unwrap_or(0) as u8,
+                    c.g.unwrap_or(0) as u8,
+                    c.b.unwrap_or(0) as u8,
+                ),
                 icon: m.icon,
                 active: active == Some(slot),
             });
@@ -288,7 +301,10 @@ impl Keyboard {
     pub fn set_keys(&mut self, colors: &[(String, Rgb)]) -> Result<()> {
         let mut frame = self.frame;
         for (id, color) in colors {
-            let key = self.layout.key(id).ok_or_else(|| Error::UnknownKey(id.clone()))?;
+            let key = self
+                .layout
+                .key(id)
+                .ok_or_else(|| Error::UnknownKey(id.clone()))?;
             for c in &key.cells {
                 frame.set(c[0] as usize, c[1] as usize, *color);
             }
@@ -339,7 +355,12 @@ impl Keyboard {
     /// Like [`write_rgb_profile`](Self::write_rgb_profile) but also sets the
     /// stored brightness in the same commit. SaveRgbProfile copies the whole
     /// RGB RAM (rows and core) into the slot, so both must be staged first.
-    pub fn write_rgb_profile_with(&self, frame: &Frame, brightness: Option<u8>, slot: u8) -> Result<()> {
+    pub fn write_rgb_profile_with(
+        &self,
+        frame: &Frame,
+        brightness: Option<u8>,
+        slot: u8,
+    ) -> Result<()> {
         let rows = |range: std::ops::Range<usize>| pb::RgbRows {
             rows: range
                 .map(|r| pb::rgb_rows::Row {
@@ -347,15 +368,26 @@ impl Keyboard {
                 })
                 .collect(),
         };
-        self.report_pb(report::kind::RGB_PROFILE_COLORS_PART1, FLAGS_RAM, &rows(0..3))?;
-        self.report_pb(report::kind::RGB_PROFILE_COLORS_PART2, FLAGS_RAM, &rows(3..6))?;
+        self.report_pb(
+            report::kind::RGB_PROFILE_COLORS_PART1,
+            FLAGS_RAM,
+            &rows(0..3),
+        )?;
+        self.report_pb(
+            report::kind::RGB_PROFILE_COLORS_PART2,
+            FLAGS_RAM,
+            &rows(3..6),
+        )?;
         if let Some(b) = brightness {
-            let mut core: pb::RgbProfileCore = self.cmd_pb(Command::GetRgbProfileCore, [0, 0, 0, slot])?;
-            let p = core.payload.get_or_insert_with(|| pb::rgb_profile_core::Payload {
-                a: Some(0xFFFF),
-                b: Some(0xFFFF),
-                ..Default::default()
-            });
+            let mut core: pb::RgbProfileCore =
+                self.cmd_pb(Command::GetRgbProfileCore, [0, 0, 0, slot])?;
+            let p = core
+                .payload
+                .get_or_insert_with(|| pb::rgb_profile_core::Payload {
+                    a: Some(0xFFFF),
+                    b: Some(0xFFFF),
+                    ..Default::default()
+                });
             p.brightness = Some(b as u32);
             self.report_pb(report::kind::RGB_PROFILE_CORE, FLAGS_RAM, &core)?;
         }
@@ -379,12 +411,15 @@ impl Keyboard {
     /// Set stored brightness. Which slot the core report targets is not yet
     /// confirmed (Phase 2 capture); SaveRgbProfile commits `slot`.
     pub fn set_brightness(&self, brightness: u8, slot: u8) -> Result<()> {
-        let mut core: pb::RgbProfileCore = self.cmd_pb(Command::GetRgbProfileCore, [0, 0, 0, slot])?;
-        let p = core.payload.get_or_insert_with(|| pb::rgb_profile_core::Payload {
-            a: Some(0xFFFF),
-            b: Some(0xFFFF),
-            ..Default::default()
-        });
+        let mut core: pb::RgbProfileCore =
+            self.cmd_pb(Command::GetRgbProfileCore, [0, 0, 0, slot])?;
+        let p = core
+            .payload
+            .get_or_insert_with(|| pb::rgb_profile_core::Payload {
+                a: Some(0xFFFF),
+                b: Some(0xFFFF),
+                ..Default::default()
+            });
         p.brightness = Some(brightness as u32);
         self.report_pb(report::kind::RGB_PROFILE_CORE, FLAGS_RAM, &core)?;
         self.cmd(Command::SaveRgbProfile, [0, 0, 0, slot])?;
@@ -430,7 +465,12 @@ impl Keyboard {
             .actuation
             .iter()
             .flat_map(|e| e.packed.iter().copied())
-            .map(|v| (self.key_id_for_matrix((v & 0xff) as u8), code_to_mm(v >> 16)))
+            .map(|v| {
+                (
+                    self.key_id_for_matrix((v & 0xff) as u8),
+                    code_to_mm(v >> 16),
+                )
+            })
             .collect())
     }
 
@@ -444,16 +484,26 @@ impl Keyboard {
 
     /// Set actuation overrides for keys (`None` removes the override) and
     /// write the table live and, with `persist`, to that slot.
-    pub fn set_per_key_actuation(&self, changes: &[(String, Option<f32>)], persist: Option<u8>) -> Result<Vec<(String, f32)>> {
+    pub fn set_per_key_actuation(
+        &self,
+        changes: &[(String, Option<f32>)],
+        persist: Option<u8>,
+    ) -> Result<Vec<(String, f32)>> {
         let slot = persist.unwrap_or(self.active_profile()?);
         let mut raw = self.per_key_raw(slot)?;
         for (id, mm) in changes {
-            let key = self.layout.key(id).ok_or_else(|| Error::UnknownKey(id.clone()))?;
+            let key = self
+                .layout
+                .key(id)
+                .ok_or_else(|| Error::UnknownKey(id.clone()))?;
             for c in &key.cells {
                 let mid = wooting_proto::rgb::matrix_id(c[0], c[1]) as u32;
-                raw.actuation.retain(|e| e.packed.first().map(|v| v & 0xff) != Some(mid));
+                raw.actuation
+                    .retain(|e| e.packed.first().map(|v| v & 0xff) != Some(mid));
                 if let Some(mm) = mm {
-                    raw.actuation.push(pb::per_key::Entry { packed: vec![(mm_to_code(*mm) << 16) | mid] });
+                    raw.actuation.push(pb::per_key::Entry {
+                        packed: vec![(mm_to_code(*mm) << 16) | mid],
+                    });
                 }
             }
         }
@@ -481,16 +531,28 @@ impl Keyboard {
         let raw = self.rt_keys_raw(slot)?;
         Ok(raw
             .keys
-            .map(|k| k.key.iter().map(|m| self.key_id_for_matrix(*m as u8)).collect())
+            .map(|k| {
+                k.key
+                    .iter()
+                    .map(|m| self.key_id_for_matrix(*m as u8))
+                    .collect()
+            })
             .unwrap_or_default())
     }
 
-    pub fn set_rt_keys(&self, changes: &[(String, bool)], persist: Option<u8>) -> Result<Vec<String>> {
+    pub fn set_rt_keys(
+        &self,
+        changes: &[(String, bool)],
+        persist: Option<u8>,
+    ) -> Result<Vec<String>> {
         let slot = persist.unwrap_or(self.active_profile()?);
         let mut raw = self.rt_keys_raw(slot)?;
         let keys = raw.keys.get_or_insert_with(Default::default);
         for (id, on) in changes {
-            let key = self.layout.key(id).ok_or_else(|| Error::UnknownKey(id.clone()))?;
+            let key = self
+                .layout
+                .key(id)
+                .ok_or_else(|| Error::UnknownKey(id.clone()))?;
             for c in &key.cells {
                 let mid = wooting_proto::rgb::matrix_id(c[0], c[1]) as u32;
                 keys.key.retain(|k| *k != mid);
@@ -528,7 +590,12 @@ impl Keyboard {
     /// Replace the effect layers (and optionally brightness) of the active
     /// RGB profile; `persist` commits into that slot. SaveRgbProfile copies
     /// the whole RGB RAM, so the rows are re-sent from flash first.
-    pub fn set_rgb_core(&self, effects: Option<pb::Effects>, brightness: Option<u8>, persist: Option<u8>) -> Result<pb::RgbProfileCore> {
+    pub fn set_rgb_core(
+        &self,
+        effects: Option<pb::Effects>,
+        brightness: Option<u8>,
+        persist: Option<u8>,
+    ) -> Result<pb::RgbProfileCore> {
         let slot = persist.unwrap_or(self.active_profile()?);
         let mut core = self.rgb_core(slot)?;
         if let Some(e) = effects {
@@ -538,11 +605,13 @@ impl Keyboard {
             core.effects = Some(pb::Effects::default());
         }
         if let Some(b) = brightness {
-            let p = core.payload.get_or_insert_with(|| pb::rgb_profile_core::Payload {
-                a: Some(0xFFFF),
-                b: Some(0xFFFF),
-                ..Default::default()
-            });
+            let p = core
+                .payload
+                .get_or_insert_with(|| pb::rgb_profile_core::Payload {
+                    a: Some(0xFFFF),
+                    b: Some(0xFFFF),
+                    ..Default::default()
+                });
             p.brightness = Some(b as u32);
         }
         if persist.is_some() {
@@ -554,7 +623,12 @@ impl Keyboard {
         Ok(core)
     }
 
-    fn write_rgb_profile_with_core(&self, frame: &Frame, core: &pb::RgbProfileCore, slot: u8) -> Result<()> {
+    fn write_rgb_profile_with_core(
+        &self,
+        frame: &Frame,
+        core: &pb::RgbProfileCore,
+        slot: u8,
+    ) -> Result<()> {
         let rows = |range: std::ops::Range<usize>| pb::RgbRows {
             rows: range
                 .map(|r| pb::rgb_rows::Row {
@@ -562,8 +636,16 @@ impl Keyboard {
                 })
                 .collect(),
         };
-        self.report_pb(report::kind::RGB_PROFILE_COLORS_PART1, FLAGS_RAM, &rows(0..3))?;
-        self.report_pb(report::kind::RGB_PROFILE_COLORS_PART2, FLAGS_RAM, &rows(3..6))?;
+        self.report_pb(
+            report::kind::RGB_PROFILE_COLORS_PART1,
+            FLAGS_RAM,
+            &rows(0..3),
+        )?;
+        self.report_pb(
+            report::kind::RGB_PROFILE_COLORS_PART2,
+            FLAGS_RAM,
+            &rows(3..6),
+        )?;
         self.report_pb(report::kind::RGB_PROFILE_CORE, FLAGS_RAM, core)?;
         self.cmd(Command::SaveRgbProfile, [0, 0, 0, slot])?;
         Ok(())
@@ -578,11 +660,19 @@ impl Keyboard {
     }
 
     pub fn compat_mode(&self) -> Result<bool> {
-        Ok(self.device_config()?.first().map(|b| b & 0x10 != 0).unwrap_or(false))
+        Ok(self
+            .device_config()?
+            .first()
+            .map(|b| b & 0x10 != 0)
+            .unwrap_or(false))
     }
 
     pub fn gamepad_mode(&self) -> Result<bool> {
-        Ok(self.device_config()?.get(6).map(|b| b & 0x04 == 0).unwrap_or(false))
+        Ok(self
+            .device_config()?
+            .get(6)
+            .map(|b| b & 0x04 == 0)
+            .unwrap_or(false))
     }
 
     /// Write DeviceConfig and soft-reset the keyboard (it re-enumerates;
@@ -590,8 +680,13 @@ impl Keyboard {
     fn write_device_config(&self, mut cfg: Vec<u8>) -> Result<()> {
         cfg.resize(7, 0);
         cfg[4] = 0;
-        let bytes = report::build_raw(self.t.protocol(), report::kind::DEVICE_CONFIG, FLAGS_RAM, &cfg)
-            .ok_or_else(|| Error::Other("device config too large".into()))?;
+        let bytes = report::build_raw(
+            self.t.protocol(),
+            report::kind::DEVICE_CONFIG,
+            FLAGS_RAM,
+            &cfg,
+        )
+        .ok_or_else(|| Error::Other("device config too large".into()))?;
         self.t.write_report(&bytes)?;
         let _ = self.t.send(Command::SoftReset, [0; 4]);
         Ok(())
@@ -600,7 +695,11 @@ impl Keyboard {
     pub fn set_compat_mode(&self, on: bool) -> Result<()> {
         let mut cfg = self.device_config()?;
         cfg.resize(7, 0);
-        if on { cfg[0] |= 0x10 } else { cfg[0] &= !0x10 }
+        if on {
+            cfg[0] |= 0x10
+        } else {
+            cfg[0] &= !0x10
+        }
         self.write_device_config(cfg)
     }
 
@@ -609,7 +708,11 @@ impl Keyboard {
     pub fn set_gamepad_mode(&self, on: bool) -> Result<()> {
         let mut cfg = self.device_config()?;
         cfg.resize(7, 0);
-        if on { cfg[6] &= !0x04 } else { cfg[6] |= 0x04 }
+        if on {
+            cfg[6] &= !0x04
+        } else {
+            cfg[6] |= 0x04
+        }
         self.write_device_config(cfg)
     }
 
@@ -634,7 +737,12 @@ impl Keyboard {
     }
 
     /// Write a whole layer. Applies live and, with `persist`, to that slot.
-    pub fn set_mapping(&self, layer: u8, rows: &[[u8; COLS]; ROWS], persist: Option<u8>) -> Result<()> {
+    pub fn set_mapping(
+        &self,
+        layer: u8,
+        rows: &[[u8; COLS]; ROWS],
+        persist: Option<u8>,
+    ) -> Result<()> {
         let m = pb::MappingProfile {
             rows: rows
                 .iter()
@@ -655,7 +763,13 @@ impl Keyboard {
     }
 
     /// Remap every cell of `key_id` on `layer` to `code`.
-    pub fn set_key_mapping(&self, layer: u8, key_id: &str, code: u8, persist: Option<u8>) -> Result<[[u8; COLS]; ROWS]> {
+    pub fn set_key_mapping(
+        &self,
+        layer: u8,
+        key_id: &str,
+        code: u8,
+        persist: Option<u8>,
+    ) -> Result<[[u8; COLS]; ROWS]> {
         let key = self
             .layout
             .key(key_id)
@@ -721,7 +835,14 @@ impl Keyboard {
                     ("socd", None, None, other(sd.other_key), None, sd.mode)
                 } else if let Some(d) = &e.dks {
                     let codes: Vec<String> = d.codes.iter().map(|c| keycode::name(*c)).collect();
-                    ("dks", None, None, None, Some((codes, d.masks.clone())), None)
+                    (
+                        "dks",
+                        None,
+                        None,
+                        None,
+                        Some((codes, d.masks.clone())),
+                        None,
+                    )
                 } else {
                     ("unknown", None, None, None, None, None)
                 };
@@ -758,14 +879,20 @@ impl Keyboard {
     }
 
     /// Add or replace an advanced-key entry (built by the `akc_*` helpers).
-    pub fn set_advanced_key(&self, key_id: &str, mut entry: pb::advanced_keys::Entry) -> Result<Vec<AdvancedKey>> {
+    pub fn set_advanced_key(
+        &self,
+        key_id: &str,
+        mut entry: pb::advanced_keys::Entry,
+    ) -> Result<Vec<AdvancedKey>> {
         let id = self.matrix_of(key_id)?;
         entry.key = Some(id);
         entry.f9.get_or_insert(0);
         let slot = self.active_profile()?;
         let mut raw = self.advanced_keys_raw(slot)?;
         if raw.entries.len() >= 40 && !raw.entries.iter().any(|e| e.key == Some(id)) {
-            return Err(Error::Other("the keyboard holds at most 40 advanced keys".into()));
+            return Err(Error::Other(
+                "the keyboard holds at most 40 advanced keys".into(),
+            ));
         }
         // Replace in place to keep the table order; append when new.
         match raw.entries.iter_mut().find(|e| e.key == Some(id)) {
@@ -778,28 +905,40 @@ impl Keyboard {
 
     pub fn akc_mod_tap(tap: u8, hold: u8) -> pb::advanced_keys::Entry {
         pb::advanced_keys::Entry {
-            mod_tap: Some(pb::advanced_keys::ModTap { tap: Some(tap as u32), hold: Some(hold as u32) }),
+            mod_tap: Some(pb::advanced_keys::ModTap {
+                tap: Some(tap as u32),
+                hold: Some(hold as u32),
+            }),
             ..Default::default()
         }
     }
 
     pub fn akc_toggle(code: u8) -> pb::advanced_keys::Entry {
         pb::advanced_keys::Entry {
-            toggle: Some(pb::advanced_keys::Toggle { code: Some(code as u32) }),
+            toggle: Some(pb::advanced_keys::Toggle {
+                code: Some(code as u32),
+            }),
             ..Default::default()
         }
     }
 
     pub fn akc_rappy_snappy(&self, other_key: &str) -> Result<pb::advanced_keys::Entry> {
         Ok(pb::advanced_keys::Entry {
-            rappy_snappy: Some(pb::advanced_keys::RappySnappy { other_key: Some(self.matrix_of(other_key)?), p2: Some(0) }),
+            rappy_snappy: Some(pb::advanced_keys::RappySnappy {
+                other_key: Some(self.matrix_of(other_key)?),
+                p2: Some(0),
+            }),
             ..Default::default()
         })
     }
 
     pub fn akc_socd(&self, other_key: &str, mode: u32) -> Result<pb::advanced_keys::Entry> {
         Ok(pb::advanced_keys::Entry {
-            socd: Some(pb::advanced_keys::Socd { other_key: Some(self.matrix_of(other_key)?), p2: Some(0), mode: Some(mode) }),
+            socd: Some(pb::advanced_keys::Socd {
+                other_key: Some(self.matrix_of(other_key)?),
+                p2: Some(0),
+                mode: Some(mode),
+            }),
             ..Default::default()
         })
     }
@@ -840,13 +979,24 @@ impl Keyboard {
     }
 
     /// Rename a profile (and recolour its badge) in flash and, if active, in RAM.
-    pub fn set_profile_metadata(&self, slot: u8, name: Option<&str>, color: Option<Rgb>) -> Result<pb::ProfileMetadata> {
-        let mut m = self.profile_metadata(slot)?.ok_or(Error::NoSuchProfile(slot))?;
+    pub fn set_profile_metadata(
+        &self,
+        slot: u8,
+        name: Option<&str>,
+        color: Option<Rgb>,
+    ) -> Result<pb::ProfileMetadata> {
+        let mut m = self
+            .profile_metadata(slot)?
+            .ok_or(Error::NoSuchProfile(slot))?;
         if let Some(n) = name {
             m.name = n.to_string();
         }
         if let Some(c) = color {
-            m.color = Some(pb::profile_metadata::Color { r: Some(c.r as u32), g: Some(c.g as u32), b: Some(c.b as u32) });
+            m.color = Some(pb::profile_metadata::Color {
+                r: Some(c.r as u32),
+                g: Some(c.g as u32),
+                b: Some(c.b as u32),
+            });
         }
         self.report_pb(report::kind::PROFILE_METADATA, flags_persist(slot), &m)?;
         if self.active_profile()? == slot {
@@ -875,6 +1025,12 @@ pub fn mapping_from_pb(m: &pb::MappingProfile) -> [[u8; COLS]; ROWS] {
     rows
 }
 
+impl Drop for Keyboard {
+    fn drop(&mut self) {
+        let _ = self.release();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -882,15 +1038,33 @@ mod tests {
     #[test]
     fn keyboard_profile_encodes_like_wootility() {
         // Omarchy profile as pushed by Wootility v5.4: 1.6 mm, RT off, 0.40 mm.
-        let s = KeyboardSettings { actuation_mm: 1.6, rapid_trigger: false, rt_press_mm: 0.4, rt_release_mm: None, continuous_rt: false, tachyon: false };
+        let s = KeyboardSettings {
+            actuation_mm: 1.6,
+            rapid_trigger: false,
+            rt_press_mm: 0.4,
+            rt_release_mm: None,
+            continuous_rt: false,
+            tachyon: false,
+        };
         let mut p = pb::KeyboardProfile::default();
         s.apply(&mut p);
-        let want = [0x0a, 0x14, 0x08, 0x99, 0xb3, 0x01, 0x10, 0x01, 0x18, 0x00, 0x20, 0xe6, 0x8c, 0x01, 0x28, 0x00, 0x30, 0x02, 0x38, 0x01, 0x48, 0x00];
+        let want = [
+            0x0a, 0x14, 0x08, 0x99, 0xb3, 0x01, 0x10, 0x01, 0x18, 0x00, 0x20, 0xe6, 0x8c, 0x01,
+            0x28, 0x00, 0x30, 0x02, 0x38, 0x01, 0x48, 0x00,
+        ];
         assert_eq!(p.encode_to_vec(), want);
         // Split sensitivity adds field 8.
-        let s2 = KeyboardSettings { rapid_trigger: true, rt_press_mm: 1.0, rt_release_mm: Some(0.55), ..s };
+        let s2 = KeyboardSettings {
+            rapid_trigger: true,
+            rt_press_mm: 1.0,
+            rt_release_mm: Some(0.55),
+            ..s
+        };
         s2.apply(&mut p);
-        let want2 = [0x0a, 0x18, 0x08, 0x99, 0xb3, 0x01, 0x10, 0x01, 0x18, 0x01, 0x20, 0x80, 0xa0, 0x01, 0x28, 0x00, 0x30, 0x02, 0x38, 0x01, 0x40, 0xcd, 0x91, 0x01, 0x48, 0x00];
+        let want2 = [
+            0x0a, 0x18, 0x08, 0x99, 0xb3, 0x01, 0x10, 0x01, 0x18, 0x01, 0x20, 0x80, 0xa0, 0x01,
+            0x28, 0x00, 0x30, 0x02, 0x38, 0x01, 0x40, 0xcd, 0x91, 0x01, 0x48, 0x00,
+        ];
         assert_eq!(p.encode_to_vec(), want2);
         assert_eq!(code_to_mm(0x4F8F), 0.97);
     }
@@ -900,7 +1074,10 @@ mod tests {
         // RShift mod-tap: tap Up (0x4f), hold RShift (0x68), matrix id 141.
         let raw = pb::AdvancedKeys {
             entries: vec![pb::advanced_keys::Entry {
-                mod_tap: Some(pb::advanced_keys::ModTap { tap: Some(0x4f), hold: Some(0x68) }),
+                mod_tap: Some(pb::advanced_keys::ModTap {
+                    tap: Some(0x4f),
+                    hold: Some(0x68),
+                }),
                 key: Some(141),
                 f9: Some(0),
                 ..Default::default()
@@ -908,28 +1085,101 @@ mod tests {
             f2: Some(0),
             count: Some(1),
         };
-        assert_eq!(raw.encode_to_vec(), [0x0a, 0x0b, 0x12, 0x04, 0x08, 0x4f, 0x10, 0x68, 0x40, 0x8d, 0x01, 0x48, 0x00, 0x10, 0x00, 0x18, 0x01]);
+        assert_eq!(
+            raw.encode_to_vec(),
+            [
+                0x0a, 0x0b, 0x12, 0x04, 0x08, 0x4f, 0x10, 0x68, 0x40, 0x8d, 0x01, 0x48, 0x00, 0x10,
+                0x00, 0x18, 0x01
+            ]
+        );
     }
 
     #[test]
     fn capture_fixtures_encode() {
         // Per-key actuation: A at 2.5 mm → d1 da 15 00 08 00 22 06 08 e1 80 fc bf 06
-        let pk = pb::PerKey { actuation: vec![pb::per_key::Entry { packed: vec![(0x67FF << 16) | 0x61] }], ..Default::default() };
-        assert_eq!(pk.encode_to_vec(), [0x22, 0x06, 0x08, 0xe1, 0x80, 0xfc, 0xbf, 0x06]);
+        let pk = pb::PerKey {
+            actuation: vec![pb::per_key::Entry {
+                packed: vec![(0x67FF << 16) | 0x61],
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            pk.encode_to_vec(),
+            [0x22, 0x06, 0x08, 0xe1, 0x80, 0xfc, 0xbf, 0x06]
+        );
         // RT keys: S enabled → 0a 04 08 62 18 01
-        let rt = pb::RtKeys { keys: Some(pb::rt_keys::Keys { key: vec![0x62], enabled: Some(1) }) };
+        let rt = pb::RtKeys {
+            keys: Some(pb::rt_keys::Keys {
+                key: vec![0x62],
+                enabled: Some(1),
+            }),
+        };
         assert_eq!(rt.encode_to_vec(), [0x0a, 0x04, 0x08, 0x62, 0x18, 0x01]);
         // Wave base effect, speed 8 → 22 0a 0a 08 0a 06 08 00 10 20 18 00
-        let fx = pb::Effects { layers: vec![pb::EffectLayer { wave: Some(pb::effect_layer::Wave { look: Some(0), speed: Some(32), direction: Some(0) }), ..Default::default() }] };
-        let core = pb::RgbProfileCore { payload: Some(pb::rgb_profile_core::Payload { brightness: Some(255), a: Some(0xFFFF), b: Some(0xFFFF), c: None, d: None }), effects: Some(fx) };
-        assert_eq!(core.encode_to_vec(), [0x0a, 0x0b, 0x08, 0xff, 0x01, 0x10, 0xff, 0xff, 0x03, 0x18, 0xff, 0xff, 0x03, 0x22, 0x0a, 0x0a, 0x08, 0x0a, 0x06, 0x08, 0x00, 0x10, 0x20, 0x18, 0x00]);
+        let fx = pb::Effects {
+            layers: vec![pb::EffectLayer {
+                wave: Some(pb::effect_layer::Wave {
+                    look: Some(0),
+                    speed: Some(32),
+                    direction: Some(0),
+                }),
+                ..Default::default()
+            }],
+        };
+        let core = pb::RgbProfileCore {
+            payload: Some(pb::rgb_profile_core::Payload {
+                brightness: Some(255),
+                a: Some(0xFFFF),
+                b: Some(0xFFFF),
+                c: None,
+                d: None,
+            }),
+            effects: Some(fx),
+        };
+        assert_eq!(
+            core.encode_to_vec(),
+            [
+                0x0a, 0x0b, 0x08, 0xff, 0x01, 0x10, 0xff, 0xff, 0x03, 0x18, 0xff, 0xff, 0x03, 0x22,
+                0x0a, 0x0a, 0x08, 0x0a, 0x06, 0x08, 0x00, 0x10, 0x20, 0x18, 0x00
+            ]
+        );
         // Advanced keys: rappy snappy A/D, SOCD Tab/L-Alt, DKS W, toggle Caps→Fn2
         let akc = pb::AdvancedKeys {
             entries: vec![
-                pb::advanced_keys::Entry { rappy_snappy: Some(pb::advanced_keys::RappySnappy { other_key: Some(0x63), p2: Some(0) }), key: Some(0x61), f9: Some(0), ..Default::default() },
-                pb::advanced_keys::Entry { socd: Some(pb::advanced_keys::Socd { other_key: Some(0xa2), p2: Some(0), mode: Some(1) }), key: Some(0x40), f9: Some(0), ..Default::default() },
-                pb::advanced_keys::Entry { dks: Some(pb::advanced_keys::Dks { codes: vec![0x17, 0x64, 0xff, 0xff], masks: vec![0xa9, 0xa4, 0xa8, 0xaa] }), key: Some(0x42), f9: Some(0), ..Default::default() },
-                pb::advanced_keys::Entry { toggle: Some(pb::advanced_keys::Toggle { code: Some(0xea) }), key: Some(0x60), f9: Some(0), ..Default::default() },
+                pb::advanced_keys::Entry {
+                    rappy_snappy: Some(pb::advanced_keys::RappySnappy {
+                        other_key: Some(0x63),
+                        p2: Some(0),
+                    }),
+                    key: Some(0x61),
+                    f9: Some(0),
+                    ..Default::default()
+                },
+                pb::advanced_keys::Entry {
+                    socd: Some(pb::advanced_keys::Socd {
+                        other_key: Some(0xa2),
+                        p2: Some(0),
+                        mode: Some(1),
+                    }),
+                    key: Some(0x40),
+                    f9: Some(0),
+                    ..Default::default()
+                },
+                pb::advanced_keys::Entry {
+                    dks: Some(pb::advanced_keys::Dks {
+                        codes: vec![0x17, 0x64, 0xff, 0xff],
+                        masks: vec![0xa9, 0xa4, 0xa8, 0xaa],
+                    }),
+                    key: Some(0x42),
+                    f9: Some(0),
+                    ..Default::default()
+                },
+                pb::advanced_keys::Entry {
+                    toggle: Some(pb::advanced_keys::Toggle { code: Some(0xea) }),
+                    key: Some(0x60),
+                    f9: Some(0),
+                    ..Default::default()
+                },
             ],
             f2: Some(0),
             count: Some(4),
@@ -940,13 +1190,17 @@ mod tests {
 
     #[test]
     fn global_settings_encode() {
-        let g = pb::GlobalSettings { power_saving: Some(pb::global_settings::PowerSaving { dim_after_minutes: Some(5), off_after_minutes: Some(10) }), numlock_inverted: Some(0), debounce_filter: Some(0) };
-        assert_eq!(g.encode_to_vec(), [0x0a, 0x04, 0x08, 0x05, 0x10, 0x0a, 0x10, 0x00, 0x18, 0x00]);
-    }
-}
-
-impl Drop for Keyboard {
-    fn drop(&mut self) {
-        let _ = self.release();
+        let g = pb::GlobalSettings {
+            power_saving: Some(pb::global_settings::PowerSaving {
+                dim_after_minutes: Some(5),
+                off_after_minutes: Some(10),
+            }),
+            numlock_inverted: Some(0),
+            debounce_filter: Some(0),
+        };
+        assert_eq!(
+            g.encode_to_vec(),
+            [0x0a, 0x04, 0x08, 0x05, 0x10, 0x0a, 0x10, 0x00, 0x18, 0x00]
+        );
     }
 }

@@ -9,7 +9,11 @@ use wooting_core::client::Backend;
 use wooting_proto::{Command, Rgb};
 
 #[derive(Parser)]
-#[command(name = "woot", version, about = "Control Wooting keyboards from the terminal")]
+#[command(
+    name = "woot",
+    version,
+    about = "Control Wooting keyboards from the terminal"
+)]
 struct Cli {
     /// Select a keyboard by hidraw path or serial number (direct mode only).
     #[arg(long, global = true)]
@@ -25,6 +29,33 @@ struct Cli {
     draft: bool,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+#[derive(Args)]
+struct LinksArgs {
+    #[command(subcommand)]
+    cmd: Option<LinksCmd>,
+}
+
+#[derive(Subcommand)]
+enum LinksCmd {
+    /// Show rules (default).
+    List,
+    /// Add a rule: --class and/or --title → profile name or slot.
+    Add {
+        /// Window class (exact, case-insensitive). See `hyprctl clients`.
+        #[arg(long)]
+        class: Option<String>,
+        /// Substring of the window title.
+        #[arg(long)]
+        title: Option<String>,
+        /// Profile name or slot number.
+        profile: String,
+    },
+    /// Remove a rule by index (from `links list`).
+    Remove { index: usize },
+    /// Profile to use when no rule matches; omit to clear.
+    Default { profile: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -73,8 +104,13 @@ enum Cmd {
         #[arg(long)]
         confirm: bool,
     },
+    /// Linked profiles: switch profile when a Hyprland window gets focus (needs wootd).
+    Links(LinksArgs),
     /// Call any API method with a JSON params object.
-    Call { method: String, params: Option<String> },
+    Call {
+        method: String,
+        params: Option<String>,
+    },
     /// List API methods.
     Methods,
     /// Raw protocol access (for protocol work).
@@ -127,7 +163,10 @@ enum ProfileCmd {
     /// Redo the last undone edit.
     Redo { slot: Option<u8> },
     /// Export a slot to a JSON file (or stdout).
-    Export { slot: Option<u8>, file: Option<String> },
+    Export {
+        slot: Option<u8>,
+        file: Option<String>,
+    },
     /// Import a JSON file into a slot.
     Import {
         slot: u8,
@@ -365,7 +404,7 @@ fn main() -> Result<()> {
     let json = cli.json;
 
     let mut backend = if cli.direct {
-        Backend::Local(wooting_core::api::Api::new(cli.device.clone()))
+        Backend::Local(Box::new(wooting_core::api::Api::new(cli.device.clone())))
     } else {
         Backend::auto(cli.device.clone())
     };
@@ -405,7 +444,11 @@ fn main() -> Result<()> {
             let start = std::time::Instant::now();
             let r = call("raw.command", json!({"command": "ping"}))?;
             if !json {
-                println!("pong in {:?} (status {})", start.elapsed(), r["status_name"]);
+                println!(
+                    "pong in {:?} (status {})",
+                    start.elapsed(),
+                    r["status_name"]
+                );
                 return Ok(());
             }
             r
@@ -417,7 +460,11 @@ fn main() -> Result<()> {
                     for p in v.as_array().into_iter().flatten() {
                         println!(
                             "{} {}  {:<24} {}",
-                            if p["active"].as_bool().unwrap_or(false) { "*" } else { " " },
+                            if p["active"].as_bool().unwrap_or(false) {
+                                "*"
+                            } else {
+                                " "
+                            },
                             p["slot"],
                             p["name"].as_str().unwrap_or(""),
                             p["icon"].as_str().unwrap_or("")
@@ -435,23 +482,37 @@ fn main() -> Result<()> {
                         list.as_array()
                             .into_iter()
                             .flatten()
-                            .find(|p| p["name"].as_str().map(|n| n.eq_ignore_ascii_case(&slot)).unwrap_or(false))
+                            .find(|p| {
+                                p["name"]
+                                    .as_str()
+                                    .map(|n| n.eq_ignore_ascii_case(&slot))
+                                    .unwrap_or(false)
+                            })
                             .and_then(|p| p["slot"].as_u64())
-                            .with_context(|| format!("no profile named {slot:?}"))? as u8
+                            .with_context(|| format!("no profile named {slot:?}"))?
+                            as u8
                     }
                 };
                 call("profile.activate", json!({"slot": n}))?
             }
             ProfileCmd::Rename { slot, name, color } => {
                 let mut p = json!({"slot": slot});
-                if let Some(n) = name { p["name"] = n.into(); }
-                if let Some(c) = color { p["color"] = c.to_hex().into(); }
+                if let Some(n) = name {
+                    p["name"] = n.into();
+                }
+                if let Some(c) = color {
+                    p["color"] = c.to_hex().into();
+                }
                 call("profile.rename", p)?
             }
-            ProfileCmd::Delete { slot, confirm } => call("profile.delete", json!({"slot": slot, "confirm": confirm}))?,
+            ProfileCmd::Delete { slot, confirm } => {
+                call("profile.delete", json!({"slot": slot, "confirm": confirm}))?
+            }
             ProfileCmd::Create { name, from, color } => {
                 let mut p = json!({"name": name, "from_slot": from});
-                if let Some(c) = color { p["color"] = c.to_hex().into(); }
+                if let Some(c) = color {
+                    p["color"] = c.to_hex().into();
+                }
                 call("profile.create", p)?
             }
             ProfileCmd::Swap { a, b } => call("profile.swap", json!({"a": a, "b": b}))?,
@@ -474,30 +535,47 @@ fn main() -> Result<()> {
                 }
             }
             ProfileCmd::Import { slot, file, name } => {
-                let text = std::fs::read_to_string(&file).with_context(|| format!("reading {file}"))?;
+                let text =
+                    std::fs::read_to_string(&file).with_context(|| format!("reading {file}"))?;
                 let v: Value = serde_json::from_str(&text)?;
                 let data = v.get("data").cloned().unwrap_or(v);
                 let mut p = json!({"slot": slot, "data": data});
-                if let Some(n) = name { p["name"] = n.into(); }
+                if let Some(n) = name {
+                    p["name"] = n.into();
+                }
                 call("profile.import", p)?
             }
         },
         Cmd::Rgb(RgbArgs { cmd }) => match cmd {
             RgbCmd::Fill { color } => call("rgb.fill", json!({"color": color.to_hex()}))?,
-            RgbCmd::Key { key, color } => call("rgb.set_key", json!({"key": key, "color": color.to_hex()}))?,
+            RgbCmd::Key { key, color } => {
+                call("rgb.set_key", json!({"key": key, "color": color.to_hex()}))?
+            }
             RgbCmd::Keys { assignments } => {
                 let mut colors = serde_json::Map::new();
                 for a in assignments {
-                    let (k, v) = a.split_once('=').with_context(|| format!("expected key=#rrggbb, got {a:?}"))?;
+                    let (k, v) = a
+                        .split_once('=')
+                        .with_context(|| format!("expected key=#rrggbb, got {a:?}"))?;
                     colors.insert(k.to_string(), Value::String(v.to_string()));
                 }
                 call("rgb.set_keys", json!({"colors": colors}))?
             }
-            RgbCmd::Image { path, mode, gamma, brightness } => {
-                let path = std::fs::canonicalize(&path).with_context(|| format!("image {path:?}"))?;
+            RgbCmd::Image {
+                path,
+                mode,
+                gamma,
+                brightness,
+            } => {
+                let path =
+                    std::fs::canonicalize(&path).with_context(|| format!("image {path:?}"))?;
                 let mut p = json!({"path": path, "mode": mode});
-                if let Some(g) = gamma { p["gamma"] = g.into(); }
-                if let Some(b) = brightness { p["brightness"] = b.into(); }
+                if let Some(g) = gamma {
+                    p["gamma"] = g.into();
+                }
+                if let Some(b) = brightness {
+                    p["brightness"] = b.into();
+                }
                 call("rgb.from_image", p)?
             }
             RgbCmd::Frame => call("rgb.get_frame", json!({}))?,
@@ -512,7 +590,12 @@ fn main() -> Result<()> {
                 let v = call("device.keys", json!({}))?;
                 if !json {
                     for k in v["keys"].as_array().into_iter().flatten() {
-                        println!("{:<10} {:<10} cells={}", k["id"].as_str().unwrap_or(""), k["label"].as_str().unwrap_or(""), k["cells"]);
+                        println!(
+                            "{:<10} {:<10} cells={}",
+                            k["id"].as_str().unwrap_or(""),
+                            k["label"].as_str().unwrap_or(""),
+                            k["cells"]
+                        );
                     }
                     return Ok(());
                 }
@@ -534,7 +617,9 @@ fn main() -> Result<()> {
         Cmd::Theme(ThemeArgs { cmd }) => match cmd {
             ThemeCmd::Apply { dir, persist } => {
                 let mut p = json!({"persist": persist});
-                if let Some(d) = dir { p["dir"] = d.into(); }
+                if let Some(d) = dir {
+                    p["dir"] = d.into();
+                }
                 call("theme.apply", p)?
             }
         },
@@ -551,7 +636,9 @@ fn main() -> Result<()> {
             MapCmd::Set { assignments, layer } => {
                 let mut keys = serde_json::Map::new();
                 for a in assignments {
-                    let (k, v) = a.split_once('=').with_context(|| format!("expected key=code, got {a:?}"))?;
+                    let (k, v) = a
+                        .split_once('=')
+                        .with_context(|| format!("expected key=code, got {a:?}"))?;
                     keys.insert(k.to_string(), Value::String(v.to_string()));
                 }
                 let v = call("keymap.set", json!({"keys": keys, "layer": layer}))?;
@@ -574,7 +661,11 @@ fn main() -> Result<()> {
                 let v = call("keycodes.list", json!({}))?;
                 if !json {
                     for c in v["codes"].as_array().into_iter().flatten() {
-                        println!("0x{:02x}  {}", c["code"].as_u64().unwrap_or(0), c["name"].as_str().unwrap_or(""));
+                        println!(
+                            "0x{:02x}  {}",
+                            c["code"].as_u64().unwrap_or(0),
+                            c["name"].as_str().unwrap_or("")
+                        );
                     }
                     return Ok(());
                 }
@@ -584,24 +675,54 @@ fn main() -> Result<()> {
         Cmd::Akc(AkcArgs { cmd }) => {
             let v = match cmd {
                 AkcCmd::List { slot } => call("advanced_keys.get", json!({"slot": slot}))?,
-                AkcCmd::Modtap { key, hold, tap } => call("advanced_keys.set", json!({"key": key, "kind": "mod_tap", "hold": hold, "tap": tap}))?,
-                AkcCmd::Toggle { key, code } => call("advanced_keys.set", json!({"key": key, "kind": "toggle", "code": code}))?,
-                AkcCmd::Rappy { key, other } => call("advanced_keys.set", json!({"key": key, "kind": "rappy_snappy", "other_key": other}))?,
-                AkcCmd::Socd { key, other, mode } => call("advanced_keys.set", json!({"key": key, "kind": "socd", "other_key": other, "mode": mode}))?,
-                AkcCmd::Dks { key, codes } => call("advanced_keys.set", json!({"key": key, "kind": "dks", "codes": codes}))?,
+                AkcCmd::Modtap { key, hold, tap } => call(
+                    "advanced_keys.set",
+                    json!({"key": key, "kind": "mod_tap", "hold": hold, "tap": tap}),
+                )?,
+                AkcCmd::Toggle { key, code } => call(
+                    "advanced_keys.set",
+                    json!({"key": key, "kind": "toggle", "code": code}),
+                )?,
+                AkcCmd::Rappy { key, other } => call(
+                    "advanced_keys.set",
+                    json!({"key": key, "kind": "rappy_snappy", "other_key": other}),
+                )?,
+                AkcCmd::Socd { key, other, mode } => call(
+                    "advanced_keys.set",
+                    json!({"key": key, "kind": "socd", "other_key": other, "mode": mode}),
+                )?,
+                AkcCmd::Dks { key, codes } => call(
+                    "advanced_keys.set",
+                    json!({"key": key, "kind": "dks", "codes": codes}),
+                )?,
                 AkcCmd::Remove { key } => call("advanced_keys.remove", json!({"key": key}))?,
             };
             if !json {
                 for e in v["entries"].as_array().into_iter().flatten() {
                     let detail = match e["kind"].as_str().unwrap_or("?") {
-                        "mod_tap" => format!("hold={} tap={}", e["hold"].as_str().unwrap_or("-"), e["tap"].as_str().unwrap_or("-")),
+                        "mod_tap" => format!(
+                            "hold={} tap={}",
+                            e["hold"].as_str().unwrap_or("-"),
+                            e["tap"].as_str().unwrap_or("-")
+                        ),
                         "toggle" => format!("toggles {}", e["tap"].as_str().unwrap_or("-")),
-                        "rappy_snappy" => format!("with {}", e["other_key"].as_str().unwrap_or("-")),
-                        "socd" => format!("with {} mode {}", e["other_key"].as_str().unwrap_or("-"), e["mode"]),
+                        "rappy_snappy" => {
+                            format!("with {}", e["other_key"].as_str().unwrap_or("-"))
+                        }
+                        "socd" => format!(
+                            "with {} mode {}",
+                            e["other_key"].as_str().unwrap_or("-"),
+                            e["mode"]
+                        ),
                         "dks" => format!("{}", e["dks_codes"]),
                         _ => String::new(),
                     };
-                    println!("{:<10} {:<13} {}", e["key"].as_str().unwrap_or("?"), e["kind"].as_str().unwrap_or("?"), detail);
+                    println!(
+                        "{:<10} {:<13} {}",
+                        e["key"].as_str().unwrap_or("?"),
+                        e["kind"].as_str().unwrap_or("?"),
+                        detail
+                    );
                 }
                 return Ok(());
             }
@@ -609,15 +730,37 @@ fn main() -> Result<()> {
         }
         Cmd::Actuation(ActuationArgs { cmd }) => match cmd {
             ActuationCmd::Show { slot } => call("settings.get", json!({"slot": slot}))?,
-            ActuationCmd::Set { point, rapid_trigger, press, release, no_split, continuous, tachyon } => {
+            ActuationCmd::Set {
+                point,
+                rapid_trigger,
+                press,
+                release,
+                no_split,
+                continuous,
+                tachyon,
+            } => {
                 let mut p = json!({});
-                if let Some(v) = point { p["actuation_mm"] = v.into(); }
-                if let Some(v) = rapid_trigger { p["rapid_trigger"] = v.into(); }
-                if let Some(v) = press { p["rt_press_mm"] = v.into(); }
-                if let Some(v) = release { p["rt_release_mm"] = v.into(); }
-                if no_split { p["rt_release_mm"] = Value::Null; }
-                if let Some(v) = continuous { p["continuous_rt"] = v.into(); }
-                if let Some(v) = tachyon { p["tachyon"] = v.into(); }
+                if let Some(v) = point {
+                    p["actuation_mm"] = v.into();
+                }
+                if let Some(v) = rapid_trigger {
+                    p["rapid_trigger"] = v.into();
+                }
+                if let Some(v) = press {
+                    p["rt_press_mm"] = v.into();
+                }
+                if let Some(v) = release {
+                    p["rt_release_mm"] = v.into();
+                }
+                if no_split {
+                    p["rt_release_mm"] = Value::Null;
+                }
+                if let Some(v) = continuous {
+                    p["continuous_rt"] = v.into();
+                }
+                if let Some(v) = tachyon {
+                    p["tachyon"] = v.into();
+                }
                 call("settings.set", p)?
             }
             ActuationCmd::Keys { assignments } => {
@@ -626,8 +769,17 @@ fn main() -> Result<()> {
                 } else {
                     let mut keys = serde_json::Map::new();
                     for a in assignments {
-                        let (k, v) = a.split_once('=').with_context(|| format!("expected key=mm, got {a:?}"))?;
-                        keys.insert(k.to_string(), if v == "-" { Value::Null } else { json!(v.parse::<f64>().context("mm must be a number")?) });
+                        let (k, v) = a
+                            .split_once('=')
+                            .with_context(|| format!("expected key=mm, got {a:?}"))?;
+                        keys.insert(
+                            k.to_string(),
+                            if v == "-" {
+                                Value::Null
+                            } else {
+                                json!(v.parse::<f64>().context("mm must be a number")?)
+                            },
+                        );
                     }
                     call("actuation.keys.set", json!({"keys": keys}))?
                 }
@@ -638,22 +790,41 @@ fn main() -> Result<()> {
                 } else {
                     let mut keys = serde_json::Map::new();
                     for a in assignments {
-                        let (k, v) = a.split_once('=').with_context(|| format!("expected key=on|off, got {a:?}"))?;
+                        let (k, v) = a
+                            .split_once('=')
+                            .with_context(|| format!("expected key=on|off, got {a:?}"))?;
                         keys.insert(k.to_string(), Value::Bool(matches!(v, "on" | "true" | "1")));
                     }
                     call("rapid_trigger.keys.set", json!({"keys": keys}))?
                 }
             }
         },
-        Cmd::Settings { dim, off, numlock_inverted, debounce, compat, gamepad, reset, confirm } => {
+        Cmd::Settings {
+            dim,
+            off,
+            numlock_inverted,
+            debounce,
+            compat,
+            gamepad,
+            reset,
+            confirm,
+        } => {
             if reset {
                 call("settings.reset", json!({"confirm": confirm}))?
             } else if compat.is_some() || gamepad.is_some() {
                 let mut p = json!({});
-                if let Some(c) = compat { p["compat_mode"] = c.into(); }
-                if let Some(g) = gamepad { p["gamepad_mode"] = g.into(); }
+                if let Some(c) = compat {
+                    p["compat_mode"] = c.into();
+                }
+                if let Some(g) = gamepad {
+                    p["gamepad_mode"] = g.into();
+                }
                 call("settings.device.set", p)?
-            } else if dim.is_none() && off.is_none() && numlock_inverted.is_none() && debounce.is_none() {
+            } else if dim.is_none()
+                && off.is_none()
+                && numlock_inverted.is_none()
+                && debounce.is_none()
+            {
                 let mut g = call("settings.global.get", json!({}))?;
                 let d = call("settings.device.get", json!({}))?;
                 g["compat_mode"] = d["compat_mode"].clone();
@@ -661,12 +832,63 @@ fn main() -> Result<()> {
                 g
             } else {
                 let mut p = json!({});
-                if let Some(d) = dim { p["dim_after_minutes"] = d.into(); }
-                if let Some(o) = off { p["off_after_minutes"] = o.into(); }
-                if let Some(n) = numlock_inverted { p["numlock_inverted"] = n.into(); }
-                if let Some(b) = debounce { p["debounce_filter"] = b.into(); }
+                if let Some(d) = dim {
+                    p["dim_after_minutes"] = d.into();
+                }
+                if let Some(o) = off {
+                    p["off_after_minutes"] = o.into();
+                }
+                if let Some(n) = numlock_inverted {
+                    p["numlock_inverted"] = n.into();
+                }
+                if let Some(b) = debounce {
+                    p["debounce_filter"] = b.into();
+                }
                 call("settings.global.set", p)?
             }
+        }
+        Cmd::Links(LinksArgs { cmd }) => {
+            let v = match cmd.unwrap_or(LinksCmd::List) {
+                LinksCmd::List => call("links.list", json!({}))?,
+                LinksCmd::Add {
+                    class,
+                    title,
+                    profile,
+                } => {
+                    if class.is_none() && title.is_none() {
+                        bail!("give --class and/or --title");
+                    }
+                    call(
+                        "links.add",
+                        json!({"class": class, "title": title, "profile": profile}),
+                    )?
+                }
+                LinksCmd::Remove { index } => call("links.remove", json!({"index": index}))?,
+                LinksCmd::Default { profile } => {
+                    call("links.default", json!({"profile": profile}))?
+                }
+            };
+            if !json {
+                println!(
+                    "default: {}",
+                    v["default"].as_str().unwrap_or("(keep current)")
+                );
+                for (i, l) in v["link"].as_array().into_iter().flatten().enumerate() {
+                    let class = l["class"].as_str().map(|c| format!("class={c}"));
+                    let title = l["title"].as_str().map(|t| format!("title~\"{t}\""));
+                    println!(
+                        "{i:>2}  {:<40} -> {}",
+                        [class, title]
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        l["profile"].as_str().unwrap_or("?")
+                    );
+                }
+                return Ok(());
+            }
+            v
         }
         Cmd::Call { method, params } => {
             let p: Value = match params {
@@ -691,11 +913,29 @@ fn main() -> Result<()> {
                 }
                 return Ok(());
             }
-            RawCmd::Cmd { command, params, confirm } => {
-                let r = call("raw.command", json!({"command": command, "params": params, "confirm": confirm}))?;
+            RawCmd::Cmd {
+                command,
+                params,
+                confirm,
+            } => {
+                let r = call(
+                    "raw.command",
+                    json!({"command": command, "params": params, "confirm": confirm}),
+                )?;
                 if !json {
-                    println!("{} status={} ({}) data={}", r["command"].as_str().unwrap_or(""), r["status"], r["status_name"].as_str().unwrap_or(""),
-                        r["data"].as_array().into_iter().flatten().map(|b| format!("{:02x}", b.as_u64().unwrap_or(0))).collect::<Vec<_>>().join(" "));
+                    println!(
+                        "{} status={} ({}) data={}",
+                        r["command"].as_str().unwrap_or(""),
+                        r["status"],
+                        r["status_name"].as_str().unwrap_or(""),
+                        r["data"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|b| format!("{:02x}", b.as_u64().unwrap_or(0)))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
                     return Ok(());
                 }
                 r
@@ -711,7 +951,13 @@ fn main() -> Result<()> {
                 let deadline = std::time::Instant::now() + Duration::from_secs(seconds);
                 while std::time::Instant::now() < deadline {
                     if let Some(r) = t.read_report(Duration::from_millis(200))? {
-                        println!("{}", r.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "));
+                        println!(
+                            "{}",
+                            r.iter()
+                                .map(|b| format!("{b:02x}"))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        );
                     }
                 }
                 return Ok(());
@@ -738,7 +984,11 @@ fn print_mapping(v: &Value) {
         "slot {} layer {}{}",
         v["slot"],
         v["layer"],
-        if v["stored"].as_bool().unwrap_or(false) { "" } else { " (factory default, nothing stored)" }
+        if v["stored"].as_bool().unwrap_or(false) {
+            ""
+        } else {
+            " (factory default, nothing stored)"
+        }
     );
     let keys = v["keys"].as_object();
     let mut items: Vec<(String, String)> = keys
@@ -766,7 +1016,9 @@ fn print_human(v: &Value) {
         Value::Object(m) => {
             for (k, v) in m {
                 match v {
-                    Value::Object(_) | Value::Array(_) => println!("{k}: {}", serde_json::to_string(v).unwrap_or_default()),
+                    Value::Object(_) | Value::Array(_) => {
+                        println!("{k}: {}", serde_json::to_string(v).unwrap_or_default())
+                    }
                     Value::String(s) => println!("{k}: {s}"),
                     other => println!("{k}: {other}"),
                 }
@@ -777,8 +1029,11 @@ fn print_human(v: &Value) {
 }
 
 fn parse_hex(s: &str) -> Result<Vec<u8>> {
-    let clean: String = s.chars().filter(|c| !c.is_whitespace() && *c != ':').collect();
-    if clean.len() % 2 != 0 {
+    let clean: String = s
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != ':')
+        .collect();
+    if !clean.len().is_multiple_of(2) {
         bail!("odd number of hex digits");
     }
     (0..clean.len())

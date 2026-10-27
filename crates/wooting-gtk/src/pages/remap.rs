@@ -55,7 +55,9 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     linked_hint.set_wrap(true);
     linked_hint.set_xalign(0.0);
     left.append(&linked_hint);
-    let howto = gtk::Label::new(Some("Select keys on the keyboard, then click a key on the right. Or pick a preset below."));
+    let howto = gtk::Label::new(Some(
+        "Select keys on the keyboard, then click a key on the right. Or pick a preset below.",
+    ));
     howto.set_wrap(true);
     howto.set_xalign(0.0);
     left.append(&howto);
@@ -66,7 +68,14 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     let presets = gtk::FlowBox::new();
     presets.set_selection_mode(gtk::SelectionMode::None);
     presets.set_max_children_per_line(4);
-    for (id, label) in [("default", "Default"), ("function", "Function"), ("dvorak", "Dvorak"), ("colemak", "Colemak"), ("workman", "Workman"), ("abc", "ABC")] {
+    for (id, label) in [
+        ("default", "Default"),
+        ("function", "Function"),
+        ("dvorak", "Dvorak"),
+        ("colemak", "Colemak"),
+        ("workman", "Workman"),
+        ("abc", "ABC"),
+    ] {
         let b = gtk::Button::with_label(label);
         b.add_css_class("keytile");
         let c = ctx.clone();
@@ -75,7 +84,8 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
             let c = c.clone();
             let layer = *cur.borrow();
             spawn(async move {
-                c.edit("keymap.set_layer", json!({"layer": layer, "preset": id})).await;
+                c.edit("keymap.set_layer", json!({"layer": layer, "preset": id}))
+                    .await;
                 c.refresh_page();
             });
         });
@@ -94,11 +104,15 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
             c.toast("Select some keys on the keyboard first");
             return;
         }
-        let map: serde_json::Map<String, Value> = keys.into_iter().map(|k| (k, Value::String(name.clone()))).collect();
+        let map: serde_json::Map<String, Value> = keys
+            .into_iter()
+            .map(|k| (k, Value::String(name.clone())))
+            .collect();
         let c = c.clone();
         let layer = *cur.borrow();
         spawn(async move {
-            c.edit("keymap.set", json!({"keys": map, "layer": layer})).await;
+            c.edit("keymap.set", json!({"keys": map, "layer": layer}))
+                .await;
             c.refresh_page();
         });
     }));
@@ -118,7 +132,9 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
         let lk = lk.clone();
         let ld = ld.clone();
         spawn(async move {
-            let Some(v) = c.call("keymap.get", json!({"layer": layer})).await else { return };
+            let Some(v) = c.call("keymap.get", json!({"layer": layer})).await else {
+                return;
+            };
             ld.set(true);
             lk.set_active(v["stored"].as_bool().unwrap_or(false));
             ld.set(false);
@@ -160,7 +176,11 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
             if on {
                 // Store the current (default) rows so the layer becomes editable.
                 if let Some(v) = c.call("keymap.get", json!({"layer": layer})).await {
-                    c.edit("keymap.set_layer", json!({"layer": layer, "rows": v["rows"]})).await;
+                    c.edit(
+                        "keymap.set_layer",
+                        json!({"layer": layer, "rows": v["rows"]}),
+                    )
+                    .await;
                 }
             } else {
                 c.edit("keymap.reset", json!({"layer": layer})).await;
@@ -189,11 +209,14 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     let cur = current.clone();
     let cb = clipboard.clone();
     paste.connect_clicked(move |_| {
-        let Some(rows) = cb.borrow().clone() else { return };
+        let Some(rows) = cb.borrow().clone() else {
+            return;
+        };
         let c = c.clone();
         let layer = *cur.borrow();
         spawn(async move {
-            c.edit("keymap.set_layer", json!({"layer": layer, "rows": rows})).await;
+            c.edit("keymap.set_layer", json!({"layer": layer, "rows": rows}))
+                .await;
             c.refresh_page();
         });
     });

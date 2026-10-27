@@ -18,8 +18,13 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     let g1 = adw::PreferencesGroup::new();
     let compat = adw::SwitchRow::builder().title("Compatibility Mode (Disable NKRO)").subtitle("Use when your BIOS or a legacy device does not accept the keyboard; restarts the keyboard").build();
     g1.add(&compat);
-    let numlock = adw::ComboRow::builder().title("Num Lock indicator behaviour").build();
-    numlock.set_model(Some(&gtk::StringList::new(&["Regular: input numbers when the indicator is on", "Inverted: input numbers when the indicator is off"])));
+    let numlock = adw::ComboRow::builder()
+        .title("Num Lock indicator behaviour")
+        .build();
+    numlock.set_model(Some(&gtk::StringList::new(&[
+        "Regular: input numbers when the indicator is on",
+        "Inverted: input numbers when the indicator is off",
+    ])));
     g1.add(&numlock);
     page.append(&g1);
 
@@ -33,11 +38,17 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     page.append(&g2);
 
     let g3 = adw::PreferencesGroup::new();
-    let debounce = adw::SwitchRow::builder().title("Debounce Filter").subtitle("Ignores unwanted keypresses caused by keys briefly bouncing back when released").build();
+    let debounce = adw::SwitchRow::builder()
+        .title("Debounce Filter")
+        .subtitle("Ignores unwanted keypresses caused by keys briefly bouncing back when released")
+        .build();
     g3.add(&debounce);
     page.append(&g3);
 
-    let g4 = adw::PreferencesGroup::builder().title("Reset all keyboard settings").description("Restores the keyboard to its factory settings. This cannot be reversed.").build();
+    let g4 = adw::PreferencesGroup::builder()
+        .title("Reset all keyboard settings")
+        .description("Restores the keyboard to its factory settings. This cannot be reversed.")
+        .build();
     let reset = gtk::Button::with_label("Reset all Keyboard Settings");
     reset.add_css_class("destructive-action");
     reset.set_halign(gtk::Align::Start);
@@ -46,7 +57,13 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
 
     let loading = Rc::new(std::cell::Cell::new(false));
     let c = ctx.clone();
-    let w = (compat.clone(), numlock.clone(), off.clone(), dim.clone(), debounce.clone());
+    let w = (
+        compat.clone(),
+        numlock.clone(),
+        off.clone(),
+        dim.clone(),
+        debounce.clone(),
+    );
     let ld = loading.clone();
     let load: Rc<dyn Fn()> = Rc::new(move || {
         let c = c.clone();
@@ -57,7 +74,11 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
             let d = c.call("settings.device.get", json!({})).await;
             ld.set(true);
             if let Some(g) = g {
-                w.1.set_selected(if g["numlock_inverted"].as_bool().unwrap_or(false) { 1 } else { 0 });
+                w.1.set_selected(if g["numlock_inverted"].as_bool().unwrap_or(false) {
+                    1
+                } else {
+                    0
+                });
                 w.2.set_value(g["off_after_minutes"].as_f64().unwrap_or(0.0));
                 w.3.set_value(g["dim_after_minutes"].as_f64().unwrap_or(0.0));
                 w.4.set_active(g["debounce_filter"].as_bool().unwrap_or(false));
@@ -73,11 +94,16 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     let c = ctx.clone();
     let ld = loading.clone();
     compat.connect_active_notify(move |r| {
-        if ld.get() { return; }
+        if ld.get() {
+            return;
+        }
         let c = c.clone();
         let on = r.is_active();
         spawn(async move {
-            if c.call("settings.device.set", json!({"compat_mode": on})).await.is_some() {
+            if c.call("settings.device.set", json!({"compat_mode": on}))
+                .await
+                .is_some()
+            {
                 c.toast("Keyboard restarting…");
             }
         });
@@ -85,27 +111,44 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     let c = ctx.clone();
     let ld = loading.clone();
     numlock.connect_selected_notify(move |r| {
-        if ld.get() { return; }
+        if ld.get() {
+            return;
+        }
         let c = c.clone();
         let inv = r.selected() == 1;
-        spawn(async move { c.call("settings.global.set", json!({"numlock_inverted": inv})).await; });
+        spawn(async move {
+            c.call("settings.global.set", json!({"numlock_inverted": inv}))
+                .await;
+        });
     });
     let c = ctx.clone();
     let ld = loading.clone();
     debounce.connect_active_notify(move |r| {
-        if ld.get() { return; }
+        if ld.get() {
+            return;
+        }
         let c = c.clone();
         let on = r.is_active();
-        spawn(async move { c.call("settings.global.set", json!({"debounce_filter": on})).await; });
+        spawn(async move {
+            c.call("settings.global.set", json!({"debounce_filter": on}))
+                .await;
+        });
     });
-    for (row, key) in [(off.clone(), "off_after_minutes"), (dim.clone(), "dim_after_minutes")] {
+    for (row, key) in [
+        (off.clone(), "off_after_minutes"),
+        (dim.clone(), "dim_after_minutes"),
+    ] {
         let c = ctx.clone();
         let ld = loading.clone();
         row.connect_value_notify(move |r| {
-            if ld.get() { return; }
+            if ld.get() {
+                return;
+            }
             let c = c.clone();
             let v = r.value() as u64;
-            spawn(async move { c.call("settings.global.set", json!({key: v})).await; });
+            spawn(async move {
+                c.call("settings.global.set", json!({key: v})).await;
+            });
         });
     }
     let c = ctx.clone();

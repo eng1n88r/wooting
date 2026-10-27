@@ -23,7 +23,10 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     row.set_homogeneous(true);
 
     // ----- actuation card
-    let (act_card, act) = card("Actuation Point", Some("Set the point to activate a keypress for the selected keys."));
+    let (act_card, act) = card(
+        "Actuation Point",
+        Some("Set the point to activate a keypress for the selected keys."),
+    );
     let act_scale = mm_scale(0.1, 4.0);
     act.append(&act_scale);
     let act_apply = gtk::Button::with_label("Apply to selection");
@@ -32,7 +35,10 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     row.append(&act_card);
 
     // ----- rapid trigger card
-    let (rt_card, rt) = card("Rapid Trigger", Some("A key rapidly activates and resets based on intended press or release."));
+    let (rt_card, rt) = card(
+        "Rapid Trigger",
+        Some("A key rapidly activates and resets based on intended press or release."),
+    );
     let rt_switch = gtk::Switch::new();
     rt_switch.set_halign(gtk::Align::End);
     let rt_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -65,7 +71,10 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     row.append(&rt_card);
 
     // ----- tachyon card
-    let (ta_card, ta) = card("Tachyon Mode", Some("Optimises the keyboard for input speed. Limits brightness and disables RGB effects."));
+    let (ta_card, ta) = card(
+        "Tachyon Mode",
+        Some("Optimises the keyboard for input speed. Limits brightness and disables RGB effects."),
+    );
     let ta_switch = gtk::Switch::new();
     ta_switch.set_halign(gtk::Align::End);
     let ta_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -82,18 +91,38 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     let c = ctx.clone();
     let press_id = Rc::new(on_scale_settled(&press, move |v| {
         let c = c.clone();
-        spawn(async move { c.edit("settings.set", json!({"rt_press_mm": (v * 100.0).round() / 100.0})).await; });
+        spawn(async move {
+            c.edit(
+                "settings.set",
+                json!({"rt_press_mm": (v * 100.0).round() / 100.0}),
+            )
+            .await;
+        });
     }));
     let c = ctx.clone();
     let release_id = Rc::new(on_scale_settled(&release, move |v| {
         let c = c.clone();
-        spawn(async move { c.edit("settings.set", json!({"rt_release_mm": (v * 100.0).round() / 100.0})).await; });
+        spawn(async move {
+            c.edit(
+                "settings.set",
+                json!({"rt_release_mm": (v * 100.0).round() / 100.0}),
+            )
+            .await;
+        });
     }));
 
     // ----- loading
     let loading = Rc::new(std::cell::Cell::new(false));
     let c = ctx.clone();
-    let w = (act_scale.clone(), rt_switch.clone(), split.clone(), press.clone(), release.clone(), ta_switch.clone(), rel_label.clone());
+    let w = (
+        act_scale.clone(),
+        rt_switch.clone(),
+        split.clone(),
+        press.clone(),
+        release.clone(),
+        ta_switch.clone(),
+        rel_label.clone(),
+    );
     let ld = loading.clone();
     let (pid, rid) = (press_id.clone(), release_id.clone());
     let load: Rc<dyn Fn()> = Rc::new(move || {
@@ -102,17 +131,32 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
         let ld = ld.clone();
         let (pid, rid) = (pid.clone(), rid.clone());
         spawn(async move {
-            let Some((s, _, rt)) = super::load_values_overlay(&c).await else { return };
+            let Some((s, _, rt)) = super::load_values_overlay(&c).await else {
+                return;
+            };
             ld.set(true);
             w.0.set_value(s["actuation_mm"].as_f64().unwrap_or(1.6));
             let sel = c.view.selected();
-            let rt_keys: Vec<String> = rt["keys"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+            let rt_keys: Vec<String> = rt["keys"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect();
             let rt_all = s["rapid_trigger"].as_bool().unwrap_or(false);
-            w.1.set_active(if sel.is_empty() { rt_all } else { rt_all || sel.iter().all(|k| rt_keys.contains(k)) });
+            w.1.set_active(if sel.is_empty() {
+                rt_all
+            } else {
+                rt_all || sel.iter().all(|k| rt_keys.contains(k))
+            });
             let rel = s["rt_release_mm"].as_f64();
             w.2.set_active(rel.is_some());
             set_scale_quiet(&w.3, &pid, s["rt_press_mm"].as_f64().unwrap_or(0.4));
-            set_scale_quiet(&w.4, &rid, rel.unwrap_or(s["rt_press_mm"].as_f64().unwrap_or(0.4)));
+            set_scale_quiet(
+                &w.4,
+                &rid,
+                rel.unwrap_or(s["rt_press_mm"].as_f64().unwrap_or(0.4)),
+            );
             w.4.set_visible(rel.is_some());
             w.6.set_visible(rel.is_some());
             w.5.set_active(s["tachyon"].as_bool().unwrap_or(false));
@@ -134,7 +178,8 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
             if sel.is_empty() {
                 c.edit("settings.set", json!({"actuation_mm": mm})).await;
             } else {
-                let keys: serde_json::Map<String, serde_json::Value> = sel.into_iter().map(|k| (k, json!(mm))).collect();
+                let keys: serde_json::Map<String, serde_json::Value> =
+                    sel.into_iter().map(|k| (k, json!(mm))).collect();
                 c.edit("actuation.keys.set", json!({"keys": keys})).await;
             }
             c.refresh_page();
@@ -153,8 +198,10 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
             if sel.is_empty() {
                 c.edit("settings.set", json!({"rapid_trigger": on})).await;
             } else {
-                let keys: serde_json::Map<String, serde_json::Value> = sel.into_iter().map(|k| (k, json!(on))).collect();
-                c.edit("rapid_trigger.keys.set", json!({"keys": keys})).await;
+                let keys: serde_json::Map<String, serde_json::Value> =
+                    sel.into_iter().map(|k| (k, json!(on))).collect();
+                c.edit("rapid_trigger.keys.set", json!({"keys": keys}))
+                    .await;
             }
             c.refresh_page();
         });
@@ -167,7 +214,11 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
             return;
         }
         let c = c.clone();
-        let v = if sw.is_active() { json!(rl.value()) } else { serde_json::Value::Null };
+        let v = if sw.is_active() {
+            json!(rl.value())
+        } else {
+            serde_json::Value::Null
+        };
         let _ = &pr;
         spawn(async move {
             c.edit("settings.set", json!({"rt_release_mm": v})).await;

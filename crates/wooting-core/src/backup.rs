@@ -54,7 +54,10 @@ pub fn snapshot(kb: &Keyboard) -> Result<Backup> {
         }
     }
     for slot in 0..8u8 {
-        match kb.transport().command(Command::GetProfileMetadata, [0, 0, 0, slot]) {
+        match kb
+            .transport()
+            .command(Command::GetProfileMetadata, [0, 0, 0, slot])
+        {
             Ok(r) if !r.data().is_empty() => {
                 responses.insert(format!("GetProfileMetadata/{slot}"), r.raw);
             }
@@ -77,6 +80,9 @@ pub fn save(kb: &Keyboard) -> Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let path = dir.join(format!("{stamp}.json"));
-    std::fs::write(&path, serde_json::to_vec_pretty(&b).map_err(std::io::Error::other)?)?;
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&b).map_err(std::io::Error::other)?,
+    )?;
     Ok(path)
 }

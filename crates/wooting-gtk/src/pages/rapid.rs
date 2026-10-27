@@ -21,7 +21,9 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     let en_switch = gtk::Switch::new();
     en_switch.set_halign(gtk::Align::Start);
     let en_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    en_row.append(&gtk::Label::new(Some("Enable for selection (all keys when nothing is selected)")));
+    en_row.append(&gtk::Label::new(Some(
+        "Enable for selection (all keys when nothing is selected)",
+    )));
     en_row.append(&en_switch);
     en.append(&en_row);
     let count = gtk::Label::new(Some("Enabled on 0 keys"));
@@ -60,16 +62,36 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     let c = ctx.clone();
     let press_id = Rc::new(on_scale_settled(&press, move |v| {
         let c = c.clone();
-        spawn(async move { c.edit("settings.set", json!({"rt_press_mm": (v * 100.0).round() / 100.0})).await; });
+        spawn(async move {
+            c.edit(
+                "settings.set",
+                json!({"rt_press_mm": (v * 100.0).round() / 100.0}),
+            )
+            .await;
+        });
     }));
     let c = ctx.clone();
     let release_id = Rc::new(on_scale_settled(&release, move |v| {
         let c = c.clone();
-        spawn(async move { c.edit("settings.set", json!({"rt_release_mm": (v * 100.0).round() / 100.0})).await; });
+        spawn(async move {
+            c.edit(
+                "settings.set",
+                json!({"rt_release_mm": (v * 100.0).round() / 100.0}),
+            )
+            .await;
+        });
     }));
     let loading = Rc::new(Cell::new(false));
     let c = ctx.clone();
-    let w = (en_switch.clone(), count.clone(), split.clone(), press.clone(), release.clone(), rl.clone(), cont.clone());
+    let w = (
+        en_switch.clone(),
+        count.clone(),
+        split.clone(),
+        press.clone(),
+        release.clone(),
+        rl.clone(),
+        cont.clone(),
+    );
     let ld = loading.clone();
     let (pid, rid) = (press_id.clone(), release_id.clone());
     let load: Rc<dyn Fn()> = Rc::new(move || {
@@ -78,17 +100,36 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
         let ld = ld.clone();
         let (pid, rid) = (pid.clone(), rid.clone());
         spawn(async move {
-            let Some((s, _, rt)) = super::load_values_overlay(&c).await else { return };
+            let Some((s, _, rt)) = super::load_values_overlay(&c).await else {
+                return;
+            };
             ld.set(true);
-            let rt_keys: Vec<String> = rt["keys"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+            let rt_keys: Vec<String> = rt["keys"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect();
             let rt_all = s["rapid_trigger"].as_bool().unwrap_or(false);
             let sel = c.view.selected();
-            w.0.set_active(if sel.is_empty() { rt_all } else { rt_all || sel.iter().all(|k| rt_keys.contains(k)) });
-            w.1.set_text(&if rt_all { "Enabled on all keys".to_string() } else { format!("Enabled on {} keys", rt_keys.len()) });
+            w.0.set_active(if sel.is_empty() {
+                rt_all
+            } else {
+                rt_all || sel.iter().all(|k| rt_keys.contains(k))
+            });
+            w.1.set_text(&if rt_all {
+                "Enabled on all keys".to_string()
+            } else {
+                format!("Enabled on {} keys", rt_keys.len())
+            });
             let rel = s["rt_release_mm"].as_f64();
             w.2.set_active(rel.is_some());
             set_scale_quiet(&w.3, &pid, s["rt_press_mm"].as_f64().unwrap_or(0.4));
-            set_scale_quiet(&w.4, &rid, rel.unwrap_or(s["rt_press_mm"].as_f64().unwrap_or(0.4)));
+            set_scale_quiet(
+                &w.4,
+                &rid,
+                rel.unwrap_or(s["rt_press_mm"].as_f64().unwrap_or(0.4)),
+            );
             w.4.set_visible(rel.is_some());
             w.5.set_visible(rel.is_some());
             w.6.set_active(s["continuous_rt"].as_bool().unwrap_or(false));
@@ -112,8 +153,10 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
             if sel.is_empty() {
                 c.edit("settings.set", json!({"rapid_trigger": on})).await;
             } else {
-                let keys: serde_json::Map<String, serde_json::Value> = sel.into_iter().map(|k| (k, json!(on))).collect();
-                c.edit("rapid_trigger.keys.set", json!({"keys": keys})).await;
+                let keys: serde_json::Map<String, serde_json::Value> =
+                    sel.into_iter().map(|k| (k, json!(on))).collect();
+                c.edit("rapid_trigger.keys.set", json!({"keys": keys}))
+                    .await;
             }
             c.refresh_page();
         });
@@ -126,7 +169,11 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
             return;
         }
         let c = c.clone();
-        let v = if sw.is_active() { json!(rel.value()) } else { serde_json::Value::Null };
+        let v = if sw.is_active() {
+            json!(rel.value())
+        } else {
+            serde_json::Value::Null
+        };
         spawn(async move {
             c.edit("settings.set", json!({"rt_release_mm": v})).await;
             c.refresh_page();

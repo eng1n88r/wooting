@@ -3,10 +3,7 @@
 use gtk::{gio, glib};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
-use wooting_core::{
-    api::ApiError,
-    client::Backend as CoreBackend,
-};
+use wooting_core::{api::ApiError, client::Backend as CoreBackend};
 
 #[derive(Clone)]
 pub struct Backend(Arc<Mutex<CoreBackend>>);

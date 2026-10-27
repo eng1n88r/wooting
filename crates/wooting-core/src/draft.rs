@@ -85,30 +85,53 @@ impl Keyboard {
         };
         // RGB goes through RAM and SaveRgbProfile.
         self.report_pb(report::kind::RGB_PROFILE_CORE, FLAGS_RAM, &data.core)?;
-        self.report_pb(report::kind::RGB_PROFILE_COLORS_PART1, FLAGS_RAM, &rows(0..3))?;
-        self.report_pb(report::kind::RGB_PROFILE_COLORS_PART2, FLAGS_RAM, &rows(3..6))?;
+        self.report_pb(
+            report::kind::RGB_PROFILE_COLORS_PART1,
+            FLAGS_RAM,
+            &rows(0..3),
+        )?;
+        self.report_pb(
+            report::kind::RGB_PROFILE_COLORS_PART2,
+            FLAGS_RAM,
+            &rows(3..6),
+        )?;
         if let WriteTarget::Flash(slot) = target {
             self.cmd(Command::SaveRgbProfile, [0, 0, 0, slot])?;
         }
         self.report_pb(report::kind::RT_KEYS, flags, &data.rt_keys)?;
         self.report_pb(report::kind::KEYBOARD_PROFILE, flags, &data.keyboard)?;
         if !data.curve.is_empty() {
-            let bytes = report::build(self.transport().protocol(), report::kind::ANALOG_CURVE, flags, &data.curve)
-                .ok_or_else(|| crate::Error::Other("curve too large".into()))?;
+            let bytes = report::build(
+                self.transport().protocol(),
+                report::kind::ANALOG_CURVE,
+                flags,
+                &data.curve,
+            )
+            .ok_or_else(|| crate::Error::Other("curve too large".into()))?;
             self.transport().write_report(&bytes)?;
         }
-        self.report_pb(report::kind::UNKNOWN_12, flags, &pb::MappingProfile::default())?;
+        self.report_pb(
+            report::kind::UNKNOWN_12,
+            flags,
+            &pb::MappingProfile::default(),
+        )?;
         for (layer, rows) in data.mapping.iter().enumerate() {
             let payload = rows
                 .map(|r| {
                     pb::MappingProfile {
-                        rows: r.iter().map(|row| pb::mapping_profile::Row { codes: row.to_vec() }).collect(),
+                        rows: r
+                            .iter()
+                            .map(|row| pb::mapping_profile::Row {
+                                codes: row.to_vec(),
+                            })
+                            .collect(),
                     }
                     .encode_to_vec()
                 })
                 .unwrap_or_default();
-            let bytes = report::build_mapping(self.transport().protocol(), flags, layer as u8, &payload)
-                .ok_or_else(|| crate::Error::Other("mapping too large".into()))?;
+            let bytes =
+                report::build_mapping(self.transport().protocol(), flags, layer as u8, &payload)
+                    .ok_or_else(|| crate::Error::Other("mapping too large".into()))?;
             self.transport().write_report(&bytes)?;
         }
         self.report_pb(report::kind::PER_KEY, flags, &data.per_key)?;
@@ -132,8 +155,13 @@ impl Keyboard {
         // Four zeroed 510-byte blobs (extra RGB layers), as Wootility sends them.
         for chunk in 0..4u8 {
             let flags = (chunk << 5) | (slot << 1);
-            let bytes = report::build(self.transport().protocol(), report::kind::PROFILE_BLOB, flags, &[0u8; 504])
-                .ok_or_else(|| crate::Error::Other("blob too large".into()))?;
+            let bytes = report::build(
+                self.transport().protocol(),
+                report::kind::PROFILE_BLOB,
+                flags,
+                &[0u8; 504],
+            )
+            .ok_or_else(|| crate::Error::Other("blob too large".into()))?;
             self.transport().write_report(&bytes)?;
         }
         self.write_profile(data, WriteTarget::Flash(slot))
@@ -187,7 +215,11 @@ impl Draft {
 
     /// Apply `edit`, snapshotting for undo, and push the result to RAM when
     /// this draft is the active profile.
-    pub fn edit(&mut self, kb: &Keyboard, edit: impl FnOnce(&mut ProfileData) -> Result<()>) -> Result<()> {
+    pub fn edit(
+        &mut self,
+        kb: &Keyboard,
+        edit: impl FnOnce(&mut ProfileData) -> Result<()>,
+    ) -> Result<()> {
         let before = self.data.clone();
         edit(&mut self.data)?;
         if self.data == before {
@@ -209,14 +241,18 @@ impl Draft {
     }
 
     pub fn undo(&mut self, kb: &Keyboard) -> Result<bool> {
-        let Some(prev) = self.undo.pop() else { return Ok(false) };
+        let Some(prev) = self.undo.pop() else {
+            return Ok(false);
+        };
         self.redo.push(std::mem::replace(&mut self.data, prev));
         self.push_ram(kb)?;
         Ok(true)
     }
 
     pub fn redo(&mut self, kb: &Keyboard) -> Result<bool> {
-        let Some(next) = self.redo.pop() else { return Ok(false) };
+        let Some(next) = self.redo.pop() else {
+            return Ok(false);
+        };
         self.undo.push(std::mem::replace(&mut self.data, next));
         self.push_ram(kb)?;
         Ok(true)
@@ -254,7 +290,9 @@ use crate::Error;
 use wooting_proto::{keycode, rgb::matrix_id, Layout, Rgb};
 
 fn key_cells<'a>(layout: &'a Layout, id: &str) -> Result<&'a wooting_proto::Key> {
-    layout.key(id).ok_or_else(|| Error::UnknownKey(id.to_string()))
+    layout
+        .key(id)
+        .ok_or_else(|| Error::UnknownKey(id.to_string()))
 }
 
 fn key_for_matrix(layout: &Layout, id: u8) -> String {
@@ -282,7 +320,11 @@ impl ProfileData {
             self.meta.name = n.to_string();
         }
         if let Some(c) = color {
-            self.meta.color = Some(pb::profile_metadata::Color { r: Some(c.r as u32), g: Some(c.g as u32), b: Some(c.b as u32) });
+            self.meta.color = Some(pb::profile_metadata::Color {
+                r: Some(c.r as u32),
+                g: Some(c.g as u32),
+                b: Some(c.b as u32),
+            });
         }
     }
 
@@ -313,17 +355,30 @@ impl ProfileData {
             .actuation
             .iter()
             .flat_map(|e| e.packed.iter().copied())
-            .map(|v| (key_for_matrix(layout, (v & 0xff) as u8), code_to_mm(v >> 16)))
+            .map(|v| {
+                (
+                    key_for_matrix(layout, (v & 0xff) as u8),
+                    code_to_mm(v >> 16),
+                )
+            })
             .collect()
     }
 
-    pub fn set_per_key_actuation(&mut self, layout: &Layout, changes: &[(String, Option<f32>)]) -> Result<()> {
+    pub fn set_per_key_actuation(
+        &mut self,
+        layout: &Layout,
+        changes: &[(String, Option<f32>)],
+    ) -> Result<()> {
         for (id, mm) in changes {
             for c in &key_cells(layout, id)?.cells {
                 let mid = matrix_id(c[0], c[1]) as u32;
-                self.per_key.actuation.retain(|e| e.packed.first().map(|v| v & 0xff) != Some(mid));
+                self.per_key
+                    .actuation
+                    .retain(|e| e.packed.first().map(|v| v & 0xff) != Some(mid));
                 if let Some(mm) = mm {
-                    self.per_key.actuation.push(pb::per_key::Entry { packed: vec![(mm_to_code(*mm) << 16) | mid] });
+                    self.per_key.actuation.push(pb::per_key::Entry {
+                        packed: vec![(mm_to_code(*mm) << 16) | mid],
+                    });
                 }
             }
         }
@@ -334,7 +389,12 @@ impl ProfileData {
         self.rt_keys
             .keys
             .as_ref()
-            .map(|k| k.key.iter().map(|m| key_for_matrix(layout, *m as u8)).collect())
+            .map(|k| {
+                k.key
+                    .iter()
+                    .map(|m| key_for_matrix(layout, *m as u8))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -356,20 +416,31 @@ impl ProfileData {
     }
 
     pub fn brightness(&self) -> u8 {
-        self.core.payload.as_ref().and_then(|p| p.brightness).unwrap_or(0) as u8
+        self.core
+            .payload
+            .as_ref()
+            .and_then(|p| p.brightness)
+            .unwrap_or(0) as u8
     }
 
     pub fn set_brightness(&mut self, b: u8) {
-        let p = self.core.payload.get_or_insert_with(|| pb::rgb_profile_core::Payload {
-            a: Some(0xFFFF),
-            b: Some(0xFFFF),
-            ..Default::default()
-        });
+        let p = self
+            .core
+            .payload
+            .get_or_insert_with(|| pb::rgb_profile_core::Payload {
+                a: Some(0xFFFF),
+                b: Some(0xFFFF),
+                ..Default::default()
+            });
         p.brightness = Some(b as u32);
     }
 
     pub fn effects(&self) -> Vec<pb::EffectLayer> {
-        self.core.effects.as_ref().map(|e| e.layers.clone()).unwrap_or_default()
+        self.core
+            .effects
+            .as_ref()
+            .map(|e| e.layers.clone())
+            .unwrap_or_default()
     }
 
     pub fn set_effects(&mut self, layers: Vec<pb::EffectLayer>) {
@@ -403,7 +474,14 @@ impl ProfileData {
                     ("socd", None, None, other(sd.other_key), None, sd.mode)
                 } else if let Some(d) = &e.dks {
                     let codes: Vec<String> = d.codes.iter().map(|c| keycode::name(*c)).collect();
-                    ("dks", None, None, None, Some((codes, d.masks.clone())), None)
+                    (
+                        "dks",
+                        None,
+                        None,
+                        None,
+                        Some((codes, d.masks.clone())),
+                        None,
+                    )
                 } else {
                     ("unknown", None, None, None, None, None)
                 };
@@ -421,13 +499,20 @@ impl ProfileData {
             .collect()
     }
 
-    pub fn set_advanced_key(&mut self, layout: &Layout, key_id: &str, mut entry: pb::advanced_keys::Entry) -> Result<()> {
+    pub fn set_advanced_key(
+        &mut self,
+        layout: &Layout,
+        key_id: &str,
+        mut entry: pb::advanced_keys::Entry,
+    ) -> Result<()> {
         let cell = key_cells(layout, key_id)?.cells[0];
         let id = matrix_id(cell[0], cell[1]) as u32;
         entry.key = Some(id);
         entry.f9.get_or_insert(0);
         if self.akc.entries.len() >= 40 && !self.akc.entries.iter().any(|e| e.key == Some(id)) {
-            return Err(Error::Other("the keyboard holds at most 40 advanced keys".into()));
+            return Err(Error::Other(
+                "the keyboard holds at most 40 advanced keys".into(),
+            ));
         }
         match self.akc.entries.iter_mut().find(|e| e.key == Some(id)) {
             Some(e) => *e = entry,

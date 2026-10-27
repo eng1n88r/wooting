@@ -17,7 +17,10 @@ impl Transport {
     /// Open the first Wooting keyboard found.
     pub fn open_first() -> Result<Transport> {
         let api = HidApi::new()?;
-        let info = enumerate_with(&api)?.into_iter().next().ok_or(Error::NotFound)?;
+        let info = enumerate_with(&api)?
+            .into_iter()
+            .next()
+            .ok_or(Error::NotFound)?;
         Self::open_with(&api, info)
     }
 
@@ -86,7 +89,10 @@ impl Transport {
             }
             tracing::trace!(?raw, "skipping unrelated input report");
         }
-        Err(Error::Timeout(cmd, (READ_TIMEOUT_MS as u64) * READ_RETRIES as u64))
+        Err(Error::Timeout(
+            cmd,
+            (READ_TIMEOUT_MS as u64) * READ_RETRIES as u64,
+        ))
     }
 
     /// Write a raw output report (first byte is the report id).
@@ -98,7 +104,9 @@ impl Transport {
     /// Read one input report, if any arrives within `timeout`.
     pub fn read_report(&self, timeout: Duration) -> Result<Option<Vec<u8>>> {
         let mut buf = vec![0u8; self.info.protocol.response_len()];
-        let n = self.dev.read_timeout(&mut buf, timeout.as_millis() as i32)?;
+        let n = self
+            .dev
+            .read_timeout(&mut buf, timeout.as_millis() as i32)?;
         Ok((n > 0).then(|| buf[..n].to_vec()))
     }
 }

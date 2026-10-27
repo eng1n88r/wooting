@@ -22,7 +22,10 @@ pub async fn serve(api: Arc<Api>, addr: SocketAddr) -> anyhow::Result<()> {
         .route("/openapi.json", get(openapi))
         .route("/v1/methods", get(list_methods))
         .route("/v1/rpc", post(rpc_endpoint))
-        .route("/v1/{*method}", post(method_endpoint).get(method_endpoint_get))
+        .route(
+            "/v1/{*method}",
+            post(method_endpoint).get(method_endpoint_get),
+        )
         .layer(CorsLayer::permissive())
         .with_state(api);
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -93,9 +96,19 @@ async fn method_endpoint(
     body: Option<Json<Value>>,
 ) -> ApiResponse {
     let params = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
-    ApiResponse(rpc::call_blocking(&api, method.replace('/', "."), params).await)
+    let method = method.replace('/', ".");
+    if method.starts_with("links.") {
+        return ApiResponse(rpc::links_call(&method, &params).map_err(|e| ApiError {
+            code: -32602,
+            message: e.to_string(),
+        }));
+    }
+    ApiResponse(rpc::call_blocking(&api, method, params).await)
 }
 
-async fn method_endpoint_get(State(api): State<Arc<Api>>, Path(method): Path<String>) -> ApiResponse {
+async fn method_endpoint_get(
+    State(api): State<Arc<Api>>,
+    Path(method): Path<String>,
+) -> ApiResponse {
     ApiResponse(rpc::call_blocking(&api, method.replace('/', "."), json!({})).await)
 }

@@ -45,13 +45,37 @@ Same methods on every surface (`woot methods` lists them):
 - HTTP: `POST http://127.0.0.1:7357/v1/rgb/fill {"color":"#00ff00"}`,
   `POST /v1/rpc` (JSON-RPC), `GET /openapi.json`, `GET /v1/methods`
 - socket: newline-delimited JSON-RPC on `$XDG_RUNTIME_DIR/wootd.sock`
-- MCP: tools `device_info`, `device_keys`, `rgb_fill`, `rgb_set_key`,
-  `rgb_set_keys`, `rgb_set_frame`, `rgb_from_image`, `rgb_save`,
-  `rgb_release`, `profile_list`, `profile_activate`, `theme_apply`,
-  `backup_create`, `raw_command`, …
+- MCP: one tool per method, `.` → `_` (`rgb_fill`, `keymap_set_key`,
+  `advanced_keys_set_mod_tap`, `links_add`, …). `claude mcp add wooting
+  -- wootd mcp` or `make mcp-add`.
 
+Method families: `device.*`, `profile.*` (list, activate, create, rename,
+delete, swap, export/import, status, save, discard, undo, redo), `rgb.*`
+(direct frame, stored rows, brightness, effects, image), `theme.apply`,
+`settings.*` (actuation, rapid trigger, per-key `actuation.keys.*` /
+`rapid_trigger.keys.*`, `settings.global.*`, `settings.device.*`),
+`keymap.*` (per key, per layer, presets), `advanced_keys.*` (DKS, mod-tap,
+toggle, Rappy Snappy, SOCD), `links.*`, `backup.create`, `raw.command`.
+
+Editing model: the daemon keeps a draft per profile slot. Edits are pushed
+to the keyboard's RAM immediately; `persist: true` (the CLI and MCP
+default) also writes flash, while the GTK app edits with `persist: false`
+and offers undo / redo / Discard / **Save to Keyboard** like Wootility.
 Direct lighting is volatile and safe to animate; `rgb.save` writes flash.
 Reset/bootloader commands need `confirm: true`.
+
+## Linked profiles (per-app switching)
+
+`wootd` watches Hyprland's event socket and activates a profile when a
+matching window gets focus. Rules live in `~/.config/wooting/links.toml`
+and can be edited from the CLI, the API or **My Profiles** in the app:
+
+```sh
+woot links add --class cs2 "Rapid Profile"     # class from `hyprctl clients -j`
+woot links add --title Minecraft 2             # title substring, slot number
+woot links default Omarchy                     # when nothing matches
+woot links                                     # list / indices for `remove`
+```
 
 ## Omarchy
 
@@ -66,15 +90,27 @@ woot rgb fill '#7aa2f7'            woot rgb keys esc=#f7768e space=#9ece6a
 woot rgb image photo.jpg           woot rgb save            woot rgb release
 woot theme apply --persist         woot profile list        woot profile activate Omarchy
 woot map show --layer 1            woot map set capslock=esc --persist
-woot actuation set --point 1.2 --rapid-trigger true --press 0.3 --persist
-woot settings --dim 5 --off 30     woot backup              woot methods
+woot map preset dvorak             woot map set --layer 1 j=down --draft
+woot actuation set --point 1.2 --rapid-trigger true --press 0.3
+woot actuation keys w=0.8 a=0.8    woot actuation rt w=on a=on
+woot akc modtap capslock --tap esc --hold lctrl   woot akc socd a d --mode 1
+woot profile create "FPS"          woot profile swap 0 3    woot profile export 2 fps.json
+woot profile status / save / discard / undo / redo         (daemon drafts)
+woot settings --dim 5 --off 30 --debounce true --compat false
+woot links add --class cs2 "Rapid Profile"                 woot backup   woot methods
 ```
 
 ## Status
 
-- Done: RGB (direct and stored), brightness, profiles (list, activate,
-  rename, delete), key mapping per layer, actuation / rapid trigger /
-  Tachyon, global power-saving settings, image/theme painting, daemon, HTTP,
-  MCP, CLI, GTK app.
+- Done (Wootility v5.4 parity): RGB per key / image / theme / brightness /
+  effect layers, profiles (list, activate, create, duplicate, rename,
+  delete, reorder/default via swap, export/import), draft editing with
+  undo / redo / Save to Keyboard, key mapping per layer with presets and
+  the full key palette, global and per-key actuation, rapid trigger
+  (per key, split, continuous), Tachyon, all advanced key kinds (DKS,
+  mod-tap, toggle, Rappy Snappy, SOCD), device settings (6KRO, Num Lock,
+  debounce, power saving, factory reset), gamepad mode toggle, linked
+  profiles via Hyprland, daemon, HTTP, MCP, CLI, GTK app.
 - Protocol notes and the Wootility captures they came from: `docs/`.
-- Not yet: mod-tap / advanced key editing, RGB effect layers, gamepad.
+- Not yet: gamepad button mapping / analog curve editor, firmware updates,
+  Wooting cloud features.

@@ -69,7 +69,9 @@ pub fn icon_for(code_name: &str) -> Option<&'static str> {
         "media_player" => "emblem-music-symbolic",
         "display_brightness_down" => "display-brightness-symbolic",
         "display_brightness_up" => "display-brightness-symbolic",
-        "mouse_left" | "mouse_right" | "mouse_middle" | "mouse_back" | "mouse_forward" => "input-mouse-symbolic",
+        "mouse_left" | "mouse_right" | "mouse_middle" | "mouse_back" | "mouse_forward" => {
+            "input-mouse-symbolic"
+        }
         _ => return None,
     })
 }
@@ -78,7 +80,14 @@ pub fn icon_for(code_name: &str) -> Option<&'static str> {
 fn load_icon(name: &str, size: i32) -> Option<cairo::ImageSurface> {
     let display = gdk::Display::default()?;
     let theme = gtk::IconTheme::for_display(&display);
-    let paintable = theme.lookup_icon(name, &[], size, 1, gtk::TextDirection::None, gtk::IconLookupFlags::empty());
+    let paintable = theme.lookup_icon(
+        name,
+        &[],
+        size,
+        1,
+        gtk::TextDirection::None,
+        gtk::IconLookupFlags::empty(),
+    );
     let file: gio::File = paintable.file()?;
     let pixbuf = gdk::gdk_pixbuf::Pixbuf::from_stream_at_scale(
         &file.read(gio::Cancellable::NONE).ok()?,
@@ -99,7 +108,11 @@ fn load_icon(name: &str, size: i32) -> Option<cairo::ImageSurface> {
         let n = pixbuf.n_channels() as usize;
         for y in 0..h as usize {
             for x in 0..w as usize {
-                let a = if n == 4 { src[y * src_stride + x * n + 3] } else { 255 };
+                let a = if n == 4 {
+                    src[y * src_stride + x * n + 3]
+                } else {
+                    255
+                };
                 let o = y * stride + x * 4;
                 data[o] = a;
                 data[o + 1] = a;
@@ -117,8 +130,10 @@ pub struct KeyboardView {
     pub state: Rc<RefCell<State>>,
     icons: Rc<RefCell<IconCache>>,
     /// Called after the selection changes.
-    on_select: Rc<RefCell<Option<Box<dyn Fn()>>>>,
+    on_select: SelectCallback,
 }
+
+type SelectCallback = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 
 const PAD: f64 = 8.0;
 
@@ -127,7 +142,10 @@ impl KeyboardView {
         let area = gtk::DrawingArea::new();
         area.set_hexpand(true);
         area.set_content_height(300);
-        let state = Rc::new(RefCell::new(State { show_colors: true, ..Default::default() }));
+        let state = Rc::new(RefCell::new(State {
+            show_colors: true,
+            ..Default::default()
+        }));
         let view = KeyboardView {
             area,
             state,
@@ -135,7 +153,8 @@ impl KeyboardView {
             on_select: Rc::new(RefCell::new(None)),
         };
         let v = view.clone();
-        view.area.set_draw_func(move |_, cr, w, h| v.draw(cr, w as f64, h as f64));
+        view.area
+            .set_draw_func(move |_, cr, w, h| v.draw(cr, w as f64, h as f64));
 
         let click = gtk::GestureClick::new();
         let v = view.clone();
@@ -216,7 +235,9 @@ impl KeyboardView {
 
     fn scale(&self, w: f64, h: f64) -> (f64, f64, f64) {
         let st = self.state.borrow();
-        let Some(l) = &st.layout else { return (1.0, 0.0, 0.0) };
+        let Some(l) = &st.layout else {
+            return (1.0, 0.0, 0.0);
+        };
         let s = ((w - 2.0 * PAD) / l.width as f64).min((h - 2.0 * PAD) / l.height as f64);
         let ox = (w - s * l.width as f64) / 2.0;
         let oy = (h - s * l.height as f64) / 2.0;
@@ -300,7 +321,10 @@ impl KeyboardView {
         let gap = s * 0.06;
         for key in &layout.keys {
             let cell = key.cells[0];
-            let c = st.frame.get(cell[0] as usize, cell[1] as usize).unwrap_or(Rgb::BLACK);
+            let c = st
+                .frame
+                .get(cell[0] as usize, cell[1] as usize)
+                .unwrap_or(Rgb::BLACK);
             let x = ox + key.x as f64 * s + gap;
             let y = oy + key.y as f64 * s + gap;
             let kw = key.w as f64 * s - 2.0 * gap;
@@ -337,7 +361,13 @@ impl KeyboardView {
                 let _ = cr.fill();
             }
             // Ink colour by luminance of the cap.
-            let lum = if st.show_colors && !marked { 0.299 * c.r as f64 + 0.587 * c.g as f64 + 0.114 * c.b as f64 } else if marked { 200.0 } else { 0.0 };
+            let lum = if st.show_colors && !marked {
+                0.299 * c.r as f64 + 0.587 * c.g as f64 + 0.114 * c.b as f64
+            } else if marked {
+                200.0
+            } else {
+                0.0
+            };
             if lum > 150.0 {
                 cr.set_source_rgba(0.0, 0.0, 0.0, 0.85);
             } else {
@@ -357,8 +387,15 @@ impl KeyboardView {
                 }
             }
             let (code_name, text) = match st.overlay {
-                Overlay::Codes => st.codes.get(&key.id).cloned().unwrap_or_else(|| (String::new(), "·".into())),
-                Overlay::Values => (String::new(), st.values.get(&key.id).cloned().unwrap_or_default()),
+                Overlay::Codes => st
+                    .codes
+                    .get(&key.id)
+                    .cloned()
+                    .unwrap_or_else(|| (String::new(), "·".into())),
+                Overlay::Values => (
+                    String::new(),
+                    st.values.get(&key.id).cloned().unwrap_or_default(),
+                ),
                 Overlay::Lighting | Overlay::Badges => (String::new(), key.label.clone()),
             };
             if let Some(icon) = icon_for(&code_name) {
@@ -423,8 +460,20 @@ fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     cr.new_sub_path();
     cr.arc(x + w - r, y + r, r, -std::f64::consts::FRAC_PI_2, 0.0);
     cr.arc(x + w - r, y + h - r, r, 0.0, std::f64::consts::FRAC_PI_2);
-    cr.arc(x + r, y + h - r, r, std::f64::consts::FRAC_PI_2, std::f64::consts::PI);
-    cr.arc(x + r, y + r, r, std::f64::consts::PI, 3.0 * std::f64::consts::FRAC_PI_2);
+    cr.arc(
+        x + r,
+        y + h - r,
+        r,
+        std::f64::consts::FRAC_PI_2,
+        std::f64::consts::PI,
+    );
+    cr.arc(
+        x + r,
+        y + r,
+        r,
+        std::f64::consts::PI,
+        3.0 * std::f64::consts::FRAC_PI_2,
+    );
     cr.close_path();
 }
 
@@ -441,7 +490,12 @@ pub fn frame_from_json(v: &serde_json::Value) -> Frame {
 }
 
 pub fn rgb_to_gdk(c: Rgb) -> gdk::RGBA {
-    gdk::RGBA::new(c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0, 1.0)
+    gdk::RGBA::new(
+        c.r as f32 / 255.0,
+        c.g as f32 / 255.0,
+        c.b as f32 / 255.0,
+        1.0,
+    )
 }
 
 pub fn gdk_to_rgb(c: &gdk::RGBA) -> Rgb {

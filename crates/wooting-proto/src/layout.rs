@@ -29,7 +29,10 @@ impl Key {
     /// Centre of the `i`-th cell, spreading cells evenly across the key.
     pub fn cell_center(&self, i: usize) -> (f32, f32) {
         let n = self.cells.len() as f32;
-        (self.x + self.w * (i as f32 + 0.5) / n, self.y + self.h / 2.0)
+        (
+            self.x + self.w * (i as f32 + 0.5) / n,
+            self.y + self.h / 2.0,
+        )
     }
 }
 
@@ -109,34 +112,144 @@ pub fn preset_mapping(name: &str, layout: &Layout) -> Option<[[u8; crate::COLS];
     match name.to_ascii_lowercase().as_str() {
         "default" => {}
         // Function row on the number row (F1..F12 on 1..=), Esc stays.
-        "function" => assign(&mut rows, &[
-            ("1", "f1"), ("2", "f2"), ("3", "f3"), ("4", "f4"), ("5", "f5"), ("6", "f6"),
-            ("7", "f7"), ("8", "f8"), ("9", "f9"), ("0", "f10"), ("minus", "f11"), ("equal", "f12"),
-        ]),
-        "dvorak" => assign(&mut rows, &[
-            ("minus", "lbracket"), ("equal", "rbracket"),
-            ("q", "quote"), ("w", "comma"), ("e", "period"), ("r", "p"), ("t", "y"), ("y", "f"), ("u", "g"),
-            ("i", "c"), ("o", "r"), ("p", "l"), ("lbracket", "slash"), ("rbracket", "equal"),
-            ("a", "a"), ("s", "o"), ("d", "e"), ("f", "u"), ("g", "i"), ("h", "d"), ("j", "h"), ("k", "t"),
-            ("l", "n"), ("semicolon", "s"), ("quote", "minus"),
-            ("z", "semicolon"), ("x", "q"), ("c", "j"), ("v", "k"), ("b", "x"), ("n", "b"), ("m", "m"),
-            ("comma", "w"), ("period", "v"), ("slash", "z"),
-        ]),
-        "colemak" => assign(&mut rows, &[
-            ("e", "f"), ("r", "p"), ("t", "g"), ("y", "j"), ("u", "l"), ("i", "u"), ("o", "y"), ("p", "semicolon"),
-            ("s", "r"), ("d", "s"), ("f", "t"), ("g", "d"), ("j", "n"), ("k", "e"), ("l", "i"), ("semicolon", "o"),
-            ("n", "k"), ("capslock", "backspace"),
-        ]),
-        "workman" => assign(&mut rows, &[
-            ("w", "d"), ("e", "r"), ("r", "w"), ("t", "b"), ("y", "j"), ("u", "f"), ("i", "u"), ("o", "p"), ("p", "semicolon"),
-            ("d", "h"), ("f", "t"), ("g", "g"), ("h", "y"), ("j", "n"), ("k", "e"), ("l", "o"), ("semicolon", "i"),
-            ("c", "m"), ("v", "c"), ("b", "v"), ("n", "k"), ("m", "l"),
-        ]),
-        "abc" => assign(&mut rows, &[
-            ("q", "a"), ("w", "b"), ("e", "c"), ("r", "d"), ("t", "e"), ("y", "f"), ("u", "g"), ("i", "h"), ("o", "i"), ("p", "j"),
-            ("a", "k"), ("s", "l"), ("d", "m"), ("f", "n"), ("g", "o"), ("h", "p"), ("j", "q"), ("k", "r"), ("l", "s"),
-            ("z", "t"), ("x", "u"), ("c", "v"), ("v", "w"), ("b", "x"), ("n", "y"), ("m", "z"),
-        ]),
+        "function" => assign(
+            &mut rows,
+            &[
+                ("1", "f1"),
+                ("2", "f2"),
+                ("3", "f3"),
+                ("4", "f4"),
+                ("5", "f5"),
+                ("6", "f6"),
+                ("7", "f7"),
+                ("8", "f8"),
+                ("9", "f9"),
+                ("0", "f10"),
+                ("minus", "f11"),
+                ("equal", "f12"),
+            ],
+        ),
+        "dvorak" => assign(
+            &mut rows,
+            &[
+                ("minus", "lbracket"),
+                ("equal", "rbracket"),
+                ("q", "quote"),
+                ("w", "comma"),
+                ("e", "period"),
+                ("r", "p"),
+                ("t", "y"),
+                ("y", "f"),
+                ("u", "g"),
+                ("i", "c"),
+                ("o", "r"),
+                ("p", "l"),
+                ("lbracket", "slash"),
+                ("rbracket", "equal"),
+                ("a", "a"),
+                ("s", "o"),
+                ("d", "e"),
+                ("f", "u"),
+                ("g", "i"),
+                ("h", "d"),
+                ("j", "h"),
+                ("k", "t"),
+                ("l", "n"),
+                ("semicolon", "s"),
+                ("quote", "minus"),
+                ("z", "semicolon"),
+                ("x", "q"),
+                ("c", "j"),
+                ("v", "k"),
+                ("b", "x"),
+                ("n", "b"),
+                ("m", "m"),
+                ("comma", "w"),
+                ("period", "v"),
+                ("slash", "z"),
+            ],
+        ),
+        "colemak" => assign(
+            &mut rows,
+            &[
+                ("e", "f"),
+                ("r", "p"),
+                ("t", "g"),
+                ("y", "j"),
+                ("u", "l"),
+                ("i", "u"),
+                ("o", "y"),
+                ("p", "semicolon"),
+                ("s", "r"),
+                ("d", "s"),
+                ("f", "t"),
+                ("g", "d"),
+                ("j", "n"),
+                ("k", "e"),
+                ("l", "i"),
+                ("semicolon", "o"),
+                ("n", "k"),
+                ("capslock", "backspace"),
+            ],
+        ),
+        "workman" => assign(
+            &mut rows,
+            &[
+                ("w", "d"),
+                ("e", "r"),
+                ("r", "w"),
+                ("t", "b"),
+                ("y", "j"),
+                ("u", "f"),
+                ("i", "u"),
+                ("o", "p"),
+                ("p", "semicolon"),
+                ("d", "h"),
+                ("f", "t"),
+                ("g", "g"),
+                ("h", "y"),
+                ("j", "n"),
+                ("k", "e"),
+                ("l", "o"),
+                ("semicolon", "i"),
+                ("c", "m"),
+                ("v", "c"),
+                ("b", "v"),
+                ("n", "k"),
+                ("m", "l"),
+            ],
+        ),
+        "abc" => assign(
+            &mut rows,
+            &[
+                ("q", "a"),
+                ("w", "b"),
+                ("e", "c"),
+                ("r", "d"),
+                ("t", "e"),
+                ("y", "f"),
+                ("u", "g"),
+                ("i", "h"),
+                ("o", "i"),
+                ("p", "j"),
+                ("a", "k"),
+                ("s", "l"),
+                ("d", "m"),
+                ("f", "n"),
+                ("g", "o"),
+                ("h", "p"),
+                ("j", "q"),
+                ("k", "r"),
+                ("l", "s"),
+                ("z", "t"),
+                ("x", "u"),
+                ("c", "v"),
+                ("v", "w"),
+                ("b", "x"),
+                ("n", "y"),
+                ("m", "z"),
+            ],
+        ),
         _ => return None,
     }
     Some(rows)
@@ -144,29 +257,57 @@ pub fn preset_mapping(name: &str, layout: &Layout) -> Option<[[u8; crate::COLS];
 
 pub const DEFAULT_LAYER0_60HE: [[u8; 14]; 6] = [
     [0xff; 14],
-    [0x26, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x2a, 0x2b, 0x27],
-    [0x28, 0x11, 0x17, 0x05, 0x12, 0x14, 0x19, 0x15, 0x09, 0x0f, 0x10, 0x2c, 0x2d, 0x2e],
-    [0x36, 0x01, 0x13, 0x04, 0x06, 0x07, 0x08, 0x0a, 0x0b, 0x0c, 0x30, 0x31, 0x2e, 0x25],
-    [0x64, 0x61, 0x1a, 0x18, 0x03, 0x16, 0x02, 0x0e, 0x0d, 0x33, 0x34, 0x35, 0xff, 0x68],
-    [0x63, 0x66, 0x65, 0xff, 0x29, 0xff, 0x29, 0xff, 0x29, 0xff, 0x69, 0x77, 0x67, 0xe7],
+    [
+        0x26, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x2a, 0x2b, 0x27,
+    ],
+    [
+        0x28, 0x11, 0x17, 0x05, 0x12, 0x14, 0x19, 0x15, 0x09, 0x0f, 0x10, 0x2c, 0x2d, 0x2e,
+    ],
+    [
+        0x36, 0x01, 0x13, 0x04, 0x06, 0x07, 0x08, 0x0a, 0x0b, 0x0c, 0x30, 0x31, 0x2e, 0x25,
+    ],
+    [
+        0x64, 0x61, 0x1a, 0x18, 0x03, 0x16, 0x02, 0x0e, 0x0d, 0x33, 0x34, 0x35, 0xff, 0x68,
+    ],
+    [
+        0x63, 0x66, 0x65, 0xff, 0x29, 0xff, 0x29, 0xff, 0x29, 0xff, 0x69, 0x77, 0x67, 0xe7,
+    ],
 ];
 
 pub const DEFAULT_LAYER1_60HE: [[u8; 14]; 6] = [
     [0xff; 14],
-    [0x32, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x49],
-    [0x43, 0xff, 0x48, 0xff, 0x5d, 0x5e, 0x5f, 0x60, 0xff, 0xff, 0xe2, 0xe3, 0xe4, 0xff],
-    [0xea, 0x47, 0x4b, 0x4a, 0x5a, 0x5b, 0x5c, 0xc1, 0xc2, 0xc0, 0xe1, 0xe0, 0xff, 0xe6],
-    [0x64, 0xff, 0xff, 0xff, 0xff, 0x57, 0x58, 0x59, 0xc3, 0xc5, 0xc4, 0x4f, 0xff, 0x68],
-    [0x63, 0x66, 0x65, 0xff, 0x29, 0x29, 0x29, 0x29, 0x29, 0xff, 0x4d, 0x4e, 0x4c, 0xe7],
+    [
+        0x32, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x49,
+    ],
+    [
+        0x43, 0xff, 0x48, 0xff, 0x5d, 0x5e, 0x5f, 0x60, 0xff, 0xff, 0xe2, 0xe3, 0xe4, 0xff,
+    ],
+    [
+        0xea, 0x47, 0x4b, 0x4a, 0x5a, 0x5b, 0x5c, 0xc1, 0xc2, 0xc0, 0xe1, 0xe0, 0xff, 0xe6,
+    ],
+    [
+        0x64, 0xff, 0xff, 0xff, 0xff, 0x57, 0x58, 0x59, 0xc3, 0xc5, 0xc4, 0x4f, 0xff, 0x68,
+    ],
+    [
+        0x63, 0x66, 0x65, 0xff, 0x29, 0x29, 0x29, 0x29, 0x29, 0xff, 0x4d, 0x4e, 0x4c, 0xe7,
+    ],
 ];
 
 pub const DEFAULT_LAYER2_60HE: [[u8; 14]; 6] = [
     [0xff; 14],
     [0xff; 14],
-    [0xff, 0xff, 0xff, 0xff, 0x05, 0x10, 0x09, 0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
-    [0xea, 0xff, 0xff, 0xff, 0x07, 0x01, 0x0d, 0x05, 0x12, 0xff, 0xff, 0xff, 0xff, 0xff],
-    [0xff, 0xff, 0xff, 0xff, 0xff, 0x0d, 0x0f, 0x16, 0x05, 0xff, 0xff, 0xff, 0xff, 0xff],
-    [0x4c, 0xe8, 0x4d, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xe7],
+    [
+        0xff, 0xff, 0xff, 0xff, 0x05, 0x10, 0x09, 0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    ],
+    [
+        0xea, 0xff, 0xff, 0xff, 0x07, 0x01, 0x0d, 0x05, 0x12, 0xff, 0xff, 0xff, 0xff, 0xff,
+    ],
+    [
+        0xff, 0xff, 0xff, 0xff, 0xff, 0x0d, 0x0f, 0x16, 0x05, 0xff, 0xff, 0xff, 0xff, 0xff,
+    ],
+    [
+        0x4c, 0xe8, 0x4d, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xe7,
+    ],
 ];
 
 #[cfg(test)]
@@ -181,7 +322,12 @@ mod tests {
         for k in &l.keys {
             assert!(seen.insert(k.id.clone()), "duplicate id {}", k.id);
             for c in &k.cells {
-                assert!(c[0] < 6 && c[1] < l.cols, "{} cell {:?} out of range", k.id, c);
+                assert!(
+                    c[0] < 6 && c[1] < l.cols,
+                    "{} cell {:?} out of range",
+                    k.id,
+                    c
+                );
                 assert_eq!(l.key_at_cell(c[0], c[1]).map(|k| &k.id), Some(&k.id));
             }
             assert!(k.x + k.w <= l.width + 1e-3, "{} overflows", k.id);

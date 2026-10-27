@@ -41,7 +41,9 @@ async fn handle(api: Arc<Api>, stream: UnixStream) -> Result<()> {
         }
         let resp = match serde_json::from_str::<Value>(&line) {
             Ok(req) => dispatch(&api, req).await,
-            Err(e) => json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}}),
+            Err(e) => {
+                json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}})
+            }
         };
         let mut out = serde_json::to_string(&resp)?;
         out.push('\n');
@@ -57,10 +59,40 @@ pub async fn dispatch(api: &Arc<Api>, req: Value) -> Value {
         return json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32600, "message": "missing method"}});
     };
     let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
+    if method.starts_with("links.") {
+        return match links_call(&method, &params) {
+            Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+            Err(e) => {
+                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": e.to_string()}})
+            }
+        };
+    }
     match call_blocking(api, method, params).await {
         Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
         Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": e}),
     }
+}
+
+/// Linked-profile rules live in the daemon (they are host configuration,
+/// not keyboard state).
+pub fn links_call(method: &str, params: &Value) -> anyhow::Result<Value> {
+    let s = |k: &str| params.get(k).and_then(Value::as_str).map(str::to_owned);
+    Ok(match method {
+        "links.list" => crate::linker::links_json(),
+        "links.add" => serde_json::to_value(crate::linker::add(
+            s("class"),
+            s("title"),
+            s("profile").ok_or_else(|| anyhow::anyhow!("profile required"))?,
+        )?)?,
+        "links.remove" => serde_json::to_value(crate::linker::remove(
+            params
+                .get("index")
+                .and_then(Value::as_u64)
+                .unwrap_or(usize::MAX as u64) as usize,
+        )?)?,
+        "links.default" => serde_json::to_value(crate::linker::set_default(s("profile"))?)?,
+        other => anyhow::bail!("unknown method {other:?}"),
+    })
 }
 
 pub async fn call_blocking(

@@ -53,7 +53,10 @@ pub const ARM_OUTPUT_REPORTS: &[(u8, usize)] =
 
 fn frame(protocol: Protocol, header: &[u8], payload: &[u8]) -> Option<Vec<u8>> {
     let needed = 2 + header.len() + payload.len();
-    let (id, size) = ARM_OUTPUT_REPORTS.iter().copied().find(|(_, s)| *s >= needed)?;
+    let (id, size) = ARM_OUTPUT_REPORTS
+        .iter()
+        .copied()
+        .find(|(_, s)| *s >= needed)?;
     let mut out = Vec::with_capacity(size + 1);
     out.push(id);
     out.push(protocol.protocol_byte());
@@ -93,7 +96,9 @@ mod tests {
     #[test]
     fn matches_wootility_capture() {
         // RgbProfileCore write captured from Wootility: d1 da 16 00 0d 00 <13 bytes>
-        let payload = [0x0a, 0x0b, 0x08, 0xff, 0x01, 0x10, 0xff, 0xff, 0x03, 0x18, 0xff, 0xff, 0x03];
+        let payload = [
+            0x0a, 0x0b, 0x08, 0xff, 0x01, 0x10, 0xff, 0xff, 0x03, 0x18, 0xff, 0xff, 0x03,
+        ];
         let r = build(Protocol::Arm, kind::RGB_PROFILE_CORE, FLAGS_RAM, &payload).unwrap();
         assert_eq!(r.len(), 33);
         assert_eq!(&r[..7], &[1, 0xD1, 0xDA, 0x16, 0x00, 0x0d, 0x00]);

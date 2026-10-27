@@ -11,6 +11,9 @@ use gtk::{gdk, gio, glib};
 use serde_json::{json, Value};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
+/// Page refreshers by page id.
+type Refreshers = Rc<RefCell<HashMap<String, Rc<dyn Fn()>>>>;
+
 /// Shared state handed to every page.
 #[derive(Clone)]
 pub struct Ctx {
@@ -20,7 +23,7 @@ pub struct Ctx {
     pub bar: ProfileBar,
     /// Page refreshers by page id; the shell calls the visible one after
     /// profile switches, undo/redo, save and discard.
-    refreshers: Rc<RefCell<HashMap<String, Rc<dyn Fn()>>>>,
+    refreshers: Refreshers,
     current_page: Rc<RefCell<String>>,
     /// Selection count label + buttons shown under the keyboard.
     selection_label: gtk::Label,
@@ -86,13 +89,19 @@ impl Ctx {
 
     /// Update the profile bar (name, badge colour, dirty/undo/redo state).
     pub async fn refresh_bar(&self) {
-        let Some(info) = self.call("device.info", json!({})).await else { return };
+        let Some(info) = self.call("device.info", json!({})).await else {
+            return;
+        };
         let draft = &info["draft"];
         let dirty = draft["dirty"].as_bool().unwrap_or(false);
         self.bar.save.set_sensitive(dirty);
         self.bar.discard.set_sensitive(dirty);
-        self.bar.undo.set_sensitive(draft["can_undo"].as_bool().unwrap_or(false));
-        self.bar.redo.set_sensitive(draft["can_redo"].as_bool().unwrap_or(false));
+        self.bar
+            .undo
+            .set_sensitive(draft["can_undo"].as_bool().unwrap_or(false));
+        self.bar
+            .redo
+            .set_sensitive(draft["can_redo"].as_bool().unwrap_or(false));
         let active = info["active_profile"].as_u64();
         if let Some(list) = self.call("profile.list", json!({})).await {
             while let Some(c) = self.bar.popover_list.first_child() {
@@ -103,7 +112,9 @@ impl Ctx {
                 let is_active = Some(slot) == active;
                 let name = p["name"].as_str().unwrap_or("?").to_string();
                 if is_active {
-                    self.bar.name.set_text(&format!("{name}{}", if dirty { " •" } else { "" }));
+                    self.bar
+                        .name
+                        .set_text(&format!("{name}{}", if dirty { " •" } else { "" }));
                     set_swatch(&self.bar.swatch, &p["color"], slot);
                 }
                 let row = adw::ActionRow::builder()
@@ -128,11 +139,21 @@ impl Ctx {
     /// Switch profile, asking what to do with unsaved edits.
     pub async fn switch_profile(&self, slot: u8) {
         let info = self.call("device.info", json!({})).await;
-        let dirty = info.as_ref().map(|i| i["draft"]["dirty"].as_bool().unwrap_or(false)).unwrap_or(false);
+        let dirty = info
+            .as_ref()
+            .map(|i| i["draft"]["dirty"].as_bool().unwrap_or(false))
+            .unwrap_or(false);
         let mut params = json!({"slot": slot});
         if dirty {
-            let dialog = adw::AlertDialog::new(Some("Unsaved changes"), Some("The current profile has edits that are not saved to the keyboard."));
-            dialog.add_responses(&[("cancel", "Cancel"), ("discard", "Discard"), ("save", "Save and switch")]);
+            let dialog = adw::AlertDialog::new(
+                Some("Unsaved changes"),
+                Some("The current profile has edits that are not saved to the keyboard."),
+            );
+            dialog.add_responses(&[
+                ("cancel", "Cancel"),
+                ("discard", "Discard"),
+                ("save", "Save and switch"),
+            ]);
             dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
             dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
             let win = self.view.area.root().and_downcast::<gtk::Window>();
@@ -168,7 +189,11 @@ fn set_swatch(swatch: &gtk::Box, color: &Value, slot: u64) {
         color["g"].as_u64().unwrap_or(120),
         color["b"].as_u64().unwrap_or(120)
     ));
-    gtk::style_context_add_provider_for_display(&gdk::Display::default().unwrap(), &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    gtk::style_context_add_provider_for_display(
+        &gdk::Display::default().unwrap(),
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
     for cls in swatch.css_classes() {
         if cls.starts_with("profile-swatch-") {
             swatch.remove_css_class(&cls);
@@ -179,14 +204,49 @@ fn set_swatch(swatch: &gtk::Box, color: &Value, slot: u64) {
 
 /// Sidebar entries: (page id, title, icon, section).
 const NAV: &[(&str, &str, &str, &str)] = &[
-    ("quick", "Quick Settings", "preferences-other-symbolic", "Profiles"),
+    (
+        "quick",
+        "Quick Settings",
+        "preferences-other-symbolic",
+        "Profiles",
+    ),
     ("profiles", "My Profiles", "view-grid-symbolic", "Profiles"),
-    ("actuation", "Actuation Point", "object-flip-vertical-symbolic", "Keyboard Configuration"),
-    ("rapid", "Rapid Trigger", "media-playlist-repeat-symbolic", "Keyboard Configuration"),
-    ("rgb", "RGB Settings", "weather-clear-symbolic", "Keyboard Configuration"),
-    ("remap", "Remap", "input-keyboard-symbolic", "Keyboard Configuration"),
-    ("advanced", "Advanced Keys", "view-more-symbolic", "Keyboard Configuration"),
-    ("gamepad", "Gamepad", "input-gaming-symbolic", "Keyboard Configuration"),
+    (
+        "actuation",
+        "Actuation Point",
+        "object-flip-vertical-symbolic",
+        "Keyboard Configuration",
+    ),
+    (
+        "rapid",
+        "Rapid Trigger",
+        "media-playlist-repeat-symbolic",
+        "Keyboard Configuration",
+    ),
+    (
+        "rgb",
+        "RGB Settings",
+        "weather-clear-symbolic",
+        "Keyboard Configuration",
+    ),
+    (
+        "remap",
+        "Remap",
+        "input-keyboard-symbolic",
+        "Keyboard Configuration",
+    ),
+    (
+        "advanced",
+        "Advanced Keys",
+        "view-more-symbolic",
+        "Keyboard Configuration",
+    ),
+    (
+        "gamepad",
+        "Gamepad",
+        "input-gaming-symbolic",
+        "Keyboard Configuration",
+    ),
     ("settings", "Settings", "emblem-system-symbolic", "Settings"),
 ];
 
@@ -199,7 +259,11 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
          .sidebar-section { font-size: 0.8em; font-weight: 700; opacity: 0.6; margin: 10px 12px 4px 12px; }
          .card-title { font-weight: 700; font-size: 1.05em; }",
     );
-    gtk::style_context_add_provider_for_display(&gdk::Display::default().unwrap(), &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    gtk::style_context_add_provider_for_display(
+        &gdk::Display::default().unwrap(),
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
 
     let backend = Backend::new();
     let view = KeyboardView::new();
@@ -222,7 +286,10 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     pbox.append(&popover_list);
     pbox.set_size_request(320, -1);
     popover.set_child(Some(&pbox));
-    let menu = gtk::MenuButton::builder().popover(&popover).icon_name("pan-down-symbolic").build();
+    let menu = gtk::MenuButton::builder()
+        .popover(&popover)
+        .icon_name("pan-down-symbolic")
+        .build();
     menu.add_css_class("flat");
     let undo = gtk::Button::from_icon_name("edit-undo-symbolic");
     undo.set_tooltip_text(Some("Undo"));
@@ -249,7 +316,16 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     bar.append(&redo);
     bar.append(&discard);
     bar.append(&save);
-    let profile_bar = ProfileBar { swatch, name, menu, undo, redo, save, discard, popover_list };
+    let profile_bar = ProfileBar {
+        swatch,
+        name,
+        menu,
+        undo,
+        redo,
+        save,
+        discard,
+        popover_list,
+    };
 
     let selection_label = gtk::Label::new(Some("No keys selected"));
     selection_label.add_css_class("dim-label");
@@ -382,7 +458,8 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         }
         st.set_visible_child_name(&id);
         *c.current_page.borrow_mut() = id.clone();
-        c.view.set_overlay(page_overlays.get(id.as_str()).copied().unwrap_or_default());
+        c.view
+            .set_overlay(page_overlays.get(id.as_str()).copied().unwrap_or_default());
         c.refresh_page();
     });
     sidebar.append(&nav);
@@ -442,7 +519,11 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
                 "{} · fw {}{}",
                 info["model"].as_str().unwrap_or("?"),
                 info["firmware"].as_str().unwrap_or("?"),
-                if c.backend.is_daemon() { "" } else { " · direct" }
+                if c.backend.is_daemon() {
+                    ""
+                } else {
+                    " · direct"
+                }
             ));
         }
         if let Some(v) = c.call("rgb.profile.get", json!({})).await {
@@ -471,8 +552,12 @@ fn install_drop_target(ctx: &Ctx) {
     let target = gtk::DropTarget::new(gio::File::static_type(), gdk::DragAction::COPY);
     let c = ctx.clone();
     target.connect_drop(move |_, value, _, _| {
-        let Ok(file) = value.get::<gio::File>() else { return false };
-        let Some(path) = file.path() else { return false };
+        let Ok(file) = value.get::<gio::File>() else {
+            return false;
+        };
+        let Some(path) = file.path() else {
+            return false;
+        };
         let c = c.clone();
         spawn(async move {
             if let Some(v) = c.call("rgb.from_image", json!({"path": path})).await {
@@ -567,53 +652,203 @@ pub fn set_scale_quiet(scale: &gtk::Scale, handler: &glib::SignalHandlerId, valu
 
 /// Keycode names → labels for drop-downs and palettes (Wootility order).
 pub const PALETTE: &[(&str, &[(&str, &str)])] = &[
-    ("Basic characters", &[
-        ("a", "A"), ("b", "B"), ("c", "C"), ("d", "D"), ("e", "E"), ("f", "F"), ("g", "G"), ("h", "H"), ("i", "I"),
-        ("j", "J"), ("k", "K"), ("l", "L"), ("m", "M"), ("n", "N"), ("o", "O"), ("p", "P"), ("q", "Q"), ("r", "R"),
-        ("s", "S"), ("t", "T"), ("u", "U"), ("v", "V"), ("w", "W"), ("x", "X"), ("y", "Y"), ("z", "Z"),
-        ("1", "1"), ("2", "2"), ("3", "3"), ("4", "4"), ("5", "5"), ("6", "6"), ("7", "7"), ("8", "8"), ("9", "9"), ("0", "0"),
-        ("minus", "- _"), ("equal", "= +"), ("lbracket", "[ {"), ("rbracket", "] }"), ("backslash", "\\ |"),
-        ("semicolon", "; :"), ("quote", "' \""), ("grave", "` ~"), ("comma", ", <"), ("period", ". >"), ("slash", "/ ?"),
-        ("nonus_backslash", "ISO \\"), ("nonus_hash", "ISO #"),
-    ]),
-    ("Extended characters", &[
-        ("esc", "Esc"), ("tab", "Tab"), ("capslock", "Caps"), ("backspace", "Backspace"), ("enter", "Enter"),
-        ("space", "Space"), ("lctrl", "L-Ctrl"), ("rctrl", "R-Ctrl"), ("lshift", "L-Shift"), ("rshift", "R-Shift"),
-        ("lalt", "L-Alt"), ("ralt", "R-Alt"), ("lgui", "L-Super"), ("rgui", "R-Super"), ("menu", "Menu"),
-        ("ime_on", "IME On"), ("ime_off", "IME Off"), ("lang3", "Lang 3"), ("lang4", "Lang 4"), ("lang5", "Lang 5"),
-        ("ro", "ろ/Ro"), ("kana", "Kana"), ("yen", "¥/Yen"), ("henkan", "Conv"), ("muhenkan", "Non-conv"),
-        ("up", "↑"), ("down", "↓"), ("left", "←"), ("right", "→"), ("printscreen", "Prt Sc"), ("scrolllock", "Scr Lk"),
-        ("pause", "Pause"), ("home", "Home"), ("end", "End"), ("insert", "Ins"), ("delete", "Del"),
-        ("pageup", "Pg Up"), ("pagedown", "Pg Dn"),
-        ("f1", "F1"), ("f2", "F2"), ("f3", "F3"), ("f4", "F4"), ("f5", "F5"), ("f6", "F6"),
-        ("f7", "F7"), ("f8", "F8"), ("f9", "F9"), ("f10", "F10"), ("f11", "F11"), ("f12", "F12"),
-        ("f13", "F13"), ("f14", "F14"), ("f15", "F15"), ("f16", "F16"), ("f17", "F17"), ("f18", "F18"),
-        ("f19", "F19"), ("f20", "F20"), ("f21", "F21"), ("f22", "F22"), ("f23", "F23"), ("f24", "F24"),
-        ("numlock", "Num Lk"), ("kp_1", "Num 1"), ("kp_2", "Num 2"), ("kp_3", "Num 3"), ("kp_4", "Num 4"),
-        ("kp_5", "Num 5"), ("kp_6", "Num 6"), ("kp_7", "Num 7"), ("kp_8", "Num 8"), ("kp_9", "Num 9"), ("kp_0", "Num 0"),
-        ("kp_slash", "Num /"), ("kp_asterisk", "Num *"), ("kp_minus", "Num -"), ("kp_plus", "Num +"), ("kp_enter", "Num ⏎"),
-    ]),
-    ("Functions", &[
-        ("media_player", "emblem-music-symbolic"), ("mail", "mail-unread-symbolic"), ("calculator", "accessories-calculator-symbolic"),
-        ("file_explorer", "folder-symbolic"), ("search", "system-search-symbolic"), ("www", "web-browser-symbolic"),
-        ("browser_back", "go-previous-symbolic"), ("browser_forward", "go-next-symbolic"), ("refresh", "view-refresh-symbolic"),
-        ("bookmark", "user-bookmarks-symbolic"), ("power", "system-shutdown-symbolic"), ("sleep", "weather-clear-night-symbolic"),
-        ("screen_switch", "video-display-symbolic"), ("app_grid", "view-app-grid-symbolic"),
-        ("display_brightness_down", "Bright -"), ("display_brightness_up", "Bright +"),
-        ("rgb_brightness_down", "RGB -"), ("rgb_brightness_up", "RGB +"), ("key_lock", "Key Lock"),
-        ("fn1", "Fn 1"), ("fn2", "Fn 2"), ("fn3", "Fn 3"),
-    ]),
-    ("Profiles", &[
-        ("profile_1", "P1"), ("profile_2", "P2"), ("profile_3", "P3"), ("profile_4", "P4"), ("rgb_mode", "Mode"), ("profile_cycle", "Cycle"),
-    ]),
-    ("Media and audio control", &[
-        ("prev_track", "media-skip-backward-symbolic"), ("play_pause", "media-playback-start-symbolic"),
-        ("stop", "media-playback-stop-symbolic"), ("next_track", "media-skip-forward-symbolic"),
-        ("mute", "audio-volume-muted-symbolic"), ("volume_down", "audio-volume-low-symbolic"), ("volume_up", "audio-volume-high-symbolic"),
-    ]),
-    ("Mouse", &[
-        ("mouse_left", "Mouse L"), ("mouse_right", "Mouse R"), ("mouse_middle", "Mouse M"), ("mouse_back", "Mouse 4"), ("mouse_forward", "Mouse 5"),
-    ]),
+    (
+        "Basic characters",
+        &[
+            ("a", "A"),
+            ("b", "B"),
+            ("c", "C"),
+            ("d", "D"),
+            ("e", "E"),
+            ("f", "F"),
+            ("g", "G"),
+            ("h", "H"),
+            ("i", "I"),
+            ("j", "J"),
+            ("k", "K"),
+            ("l", "L"),
+            ("m", "M"),
+            ("n", "N"),
+            ("o", "O"),
+            ("p", "P"),
+            ("q", "Q"),
+            ("r", "R"),
+            ("s", "S"),
+            ("t", "T"),
+            ("u", "U"),
+            ("v", "V"),
+            ("w", "W"),
+            ("x", "X"),
+            ("y", "Y"),
+            ("z", "Z"),
+            ("1", "1"),
+            ("2", "2"),
+            ("3", "3"),
+            ("4", "4"),
+            ("5", "5"),
+            ("6", "6"),
+            ("7", "7"),
+            ("8", "8"),
+            ("9", "9"),
+            ("0", "0"),
+            ("minus", "- _"),
+            ("equal", "= +"),
+            ("lbracket", "[ {"),
+            ("rbracket", "] }"),
+            ("backslash", "\\ |"),
+            ("semicolon", "; :"),
+            ("quote", "' \""),
+            ("grave", "` ~"),
+            ("comma", ", <"),
+            ("period", ". >"),
+            ("slash", "/ ?"),
+            ("nonus_backslash", "ISO \\"),
+            ("nonus_hash", "ISO #"),
+        ],
+    ),
+    (
+        "Extended characters",
+        &[
+            ("esc", "Esc"),
+            ("tab", "Tab"),
+            ("capslock", "Caps"),
+            ("backspace", "Backspace"),
+            ("enter", "Enter"),
+            ("space", "Space"),
+            ("lctrl", "L-Ctrl"),
+            ("rctrl", "R-Ctrl"),
+            ("lshift", "L-Shift"),
+            ("rshift", "R-Shift"),
+            ("lalt", "L-Alt"),
+            ("ralt", "R-Alt"),
+            ("lgui", "L-Super"),
+            ("rgui", "R-Super"),
+            ("menu", "Menu"),
+            ("ime_on", "IME On"),
+            ("ime_off", "IME Off"),
+            ("lang3", "Lang 3"),
+            ("lang4", "Lang 4"),
+            ("lang5", "Lang 5"),
+            ("ro", "ろ/Ro"),
+            ("kana", "Kana"),
+            ("yen", "¥/Yen"),
+            ("henkan", "Conv"),
+            ("muhenkan", "Non-conv"),
+            ("up", "↑"),
+            ("down", "↓"),
+            ("left", "←"),
+            ("right", "→"),
+            ("printscreen", "Prt Sc"),
+            ("scrolllock", "Scr Lk"),
+            ("pause", "Pause"),
+            ("home", "Home"),
+            ("end", "End"),
+            ("insert", "Ins"),
+            ("delete", "Del"),
+            ("pageup", "Pg Up"),
+            ("pagedown", "Pg Dn"),
+            ("f1", "F1"),
+            ("f2", "F2"),
+            ("f3", "F3"),
+            ("f4", "F4"),
+            ("f5", "F5"),
+            ("f6", "F6"),
+            ("f7", "F7"),
+            ("f8", "F8"),
+            ("f9", "F9"),
+            ("f10", "F10"),
+            ("f11", "F11"),
+            ("f12", "F12"),
+            ("f13", "F13"),
+            ("f14", "F14"),
+            ("f15", "F15"),
+            ("f16", "F16"),
+            ("f17", "F17"),
+            ("f18", "F18"),
+            ("f19", "F19"),
+            ("f20", "F20"),
+            ("f21", "F21"),
+            ("f22", "F22"),
+            ("f23", "F23"),
+            ("f24", "F24"),
+            ("numlock", "Num Lk"),
+            ("kp_1", "Num 1"),
+            ("kp_2", "Num 2"),
+            ("kp_3", "Num 3"),
+            ("kp_4", "Num 4"),
+            ("kp_5", "Num 5"),
+            ("kp_6", "Num 6"),
+            ("kp_7", "Num 7"),
+            ("kp_8", "Num 8"),
+            ("kp_9", "Num 9"),
+            ("kp_0", "Num 0"),
+            ("kp_slash", "Num /"),
+            ("kp_asterisk", "Num *"),
+            ("kp_minus", "Num -"),
+            ("kp_plus", "Num +"),
+            ("kp_enter", "Num ⏎"),
+        ],
+    ),
+    (
+        "Functions",
+        &[
+            ("media_player", "emblem-music-symbolic"),
+            ("mail", "mail-unread-symbolic"),
+            ("calculator", "accessories-calculator-symbolic"),
+            ("file_explorer", "folder-symbolic"),
+            ("search", "system-search-symbolic"),
+            ("www", "web-browser-symbolic"),
+            ("browser_back", "go-previous-symbolic"),
+            ("browser_forward", "go-next-symbolic"),
+            ("refresh", "view-refresh-symbolic"),
+            ("bookmark", "user-bookmarks-symbolic"),
+            ("power", "system-shutdown-symbolic"),
+            ("sleep", "weather-clear-night-symbolic"),
+            ("screen_switch", "video-display-symbolic"),
+            ("app_grid", "view-app-grid-symbolic"),
+            ("display_brightness_down", "Bright -"),
+            ("display_brightness_up", "Bright +"),
+            ("rgb_brightness_down", "RGB -"),
+            ("rgb_brightness_up", "RGB +"),
+            ("key_lock", "Key Lock"),
+            ("fn1", "Fn 1"),
+            ("fn2", "Fn 2"),
+            ("fn3", "Fn 3"),
+        ],
+    ),
+    (
+        "Profiles",
+        &[
+            ("profile_1", "P1"),
+            ("profile_2", "P2"),
+            ("profile_3", "P3"),
+            ("profile_4", "P4"),
+            ("rgb_mode", "Mode"),
+            ("profile_cycle", "Cycle"),
+        ],
+    ),
+    (
+        "Media and audio control",
+        &[
+            ("prev_track", "media-skip-backward-symbolic"),
+            ("play_pause", "media-playback-start-symbolic"),
+            ("stop", "media-playback-stop-symbolic"),
+            ("next_track", "media-skip-forward-symbolic"),
+            ("mute", "audio-volume-muted-symbolic"),
+            ("volume_down", "audio-volume-low-symbolic"),
+            ("volume_up", "audio-volume-high-symbolic"),
+        ],
+    ),
+    (
+        "Mouse",
+        &[
+            ("mouse_left", "Mouse L"),
+            ("mouse_right", "Mouse R"),
+            ("mouse_middle", "Mouse M"),
+            ("mouse_back", "Mouse 4"),
+            ("mouse_forward", "Mouse 5"),
+        ],
+    ),
     ("Other", &[("none", "Disable")]),
 ];
 
@@ -666,7 +901,9 @@ pub fn key_palette(on_pick: Rc<dyn Fn(String)>) -> gtk::Box {
             }
         }
         for (title, flow) in groups.iter() {
-            let any = (0..).map_while(|i| flow.child_at_index(i)).any(|ch| ch.is_visible());
+            let any = (0..)
+                .map_while(|i| flow.child_at_index(i))
+                .any(|ch| ch.is_visible());
             title.set_visible(any);
         }
     });
@@ -679,7 +916,11 @@ pub fn code_choices() -> Vec<(String, String)> {
         .iter()
         .flat_map(|(_, keys)| keys.iter())
         .map(|(name, label)| {
-            let label = if label.ends_with("-symbolic") { name.replace('_', " ") } else { label.to_string() };
+            let label = if label.ends_with("-symbolic") {
+                name.replace('_', " ")
+            } else {
+                label.to_string()
+            };
             (name.to_string(), label)
         })
         .collect()
@@ -694,5 +935,7 @@ pub fn code_dropdown(choices: &[(String, String)]) -> gtk::DropDown {
 }
 
 pub fn label_for(name: &str) -> String {
-    wooting_proto::keycode::parse(name).map(wooting_proto::keycode::label).unwrap_or_else(|| name.to_string())
+    wooting_proto::keycode::parse(name)
+        .map(wooting_proto::keycode::label)
+        .unwrap_or_else(|| name.to_string())
 }

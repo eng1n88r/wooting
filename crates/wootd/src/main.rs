@@ -2,6 +2,7 @@
 //! HTTP (localhost) and, in `mcp` mode, the Model Context Protocol on stdio.
 
 mod http;
+mod linker;
 mod mcp;
 mod rpc;
 
@@ -46,8 +47,7 @@ enum Cmd {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -65,6 +65,7 @@ async fn main() -> Result<()> {
             let api = Arc::new(Api::new(cli.device));
             let socket = socket.unwrap_or_else(default_socket_path);
             let rpc = tokio::spawn(rpc::serve_socket(api.clone(), socket.clone()));
+            tokio::spawn(linker::run(api.clone()));
             tracing::info!(socket = %socket.display(), "listening");
             let http_task = if no_http {
                 None

@@ -89,18 +89,20 @@ messages without them, so our `.proto` declares those fields `optional`.
 
 | type | name | protobuf (`proto/wooting.proto`) |
 |------|------|----------|
-| 0x07 | DeviceConfig | raw 7 bytes, no length |
+| 0x07 | DeviceConfig | raw 7 bytes, no length: byte0 bit4 = compatibility mode (6KRO), byte6 `0x0C` normal / `0x08` gamepad; followed by `SoftReset(25)` (gamepad re-enumerates as PID 0x1320) |
 | 0x0E / 0x0F | RgbProfileColorsPart1/2 | `RgbRows` rows 0..2 / 3..5, packed RGB565; always flags 0, then `SaveRgbProfile(p3=slot)` |
-| 0x11 | KeyboardProfile | `KeyboardProfile`: actuation, rapid trigger, sensitivities, Tachyon. Preceded by an empty 0x1D with the same flags |
-| 0x12, 0x15, 0x1D | ? | sent empty around profile writes |
+| 0x11 | KeyboardProfile | `KeyboardProfile`: actuation, rapid trigger, sensitivities, Tachyon, field 7 = 0 → continuous rapid trigger |
+| 0x12 | ? | sent empty around profile writes |
 | 0x13 | AnalogCurve | 4 (x,y) points + extras; constant so far |
 | 0x14 | MappingProfile | 6 rows × 21 key codes per layer (0 main, 1–2 Fn, 3 empty); empty = factory default |
-| 0x16 | RgbProfileCore | brightness + opaque effect layers (field 4) |
-| 0x17 | GlobalSettings | power saving timers; flags 0x01 |
-| 0x18 | AdvancedKeys | mod-tap entries; then `SaveAkcProfile(p3=slot)` |
+| 0x15 | PerKey | per-key actuation exceptions: field 4 entries, each `(code << 16) \| matrix_id` |
+| 0x16 | RgbProfileCore | brightness + `Effects` (field 4): layers with a `oneof` effect (wave, scan, breath, cycle, ripple, trail, touch, jelly, aoe, mixing, rt_display, noise, spiral) |
+| 0x17 | GlobalSettings | power saving timers, field 2 Num Lock inverted, field 3 debounce filter; flags 0x01 |
+| 0x18 | AdvancedKeys | entries: kind dks=1 {codes[4], masks[4]}, mod_tap=2 {tap, hold}, toggle=3 {code}, rappy_snappy=4 {other_key}, socd=5 {other_key, mode}; field 8 = matrix id (`row<<5 \| col`); then `SaveAkcProfile(p3=slot)` |
 | 0x1A | ProfileMetadata | name, badge colour, icon |
 | 0x1B | profile blob | 4 × 510-byte zero chunks on profile creation, flags `chunk<<5 \| 6` |
-| 0x28 | ? | `12 02 08 00`, flags 0x01, after save |
+| 0x1D | RtKeys | per-key rapid-trigger list `Keys { key[], enabled = 3 }`; read back with `GetRtKeys(61)` |
+| 0x28 | default profile | `12 02 08 00`, flags 0x01, after save; "Set as default" in Wootility is a full slot swap (default = slot 0) |
 | 0x0B | WootDevRawReport | raw RGB565 grid (same as the direct frame) |
 
 Reads of 0x11/0x14/0x1A/0x35/0x36/0x50 data take the slot in p3 (byte 4);
@@ -121,9 +123,15 @@ sensitivity, 8 release sensitivity (only with split sensitivity), 5 Tachyon
 ## Key codes
 
 HID usage − 3 for ordinary keys (A = 1 … F1 = 0x37, Delete = 0x49, arrows
-0x4C–0x4F), modifiers 0x63–0x6A (LCtrl … RGui), 0x77 Menu, 0xE7 Fn1,
-0xEA Fn2, 0xC0–0xC5 / 0xE0–0xE8 media and specials (names TBD), 0xFF none.
-See `crates/wooting-proto/src/keycode.rs`.
+0x4C–0x4F), keypad block HID − 2, modifiers 0x63–0x6A (LCtrl … RGui),
+F13–F24 0x6B–0x76, 0x77 Menu, media 0xC0–0xC5, functions 0xC6–0xD7 (media
+player, mail, calculator, explorer, search, www, back, forward, stop,
+refresh, bookmark, power, sleep, screen switch, app grid, display
+brightness −/+), mouse buttons 0xD8–0xDC, RGB brightness 0xE0/0xE1,
+profiles 0xE2–0xE5 (P2, P3, P4, P1), 0xE6 RGB mode, 0xE7 Fn1, 0xE8 key
+lock, 0xEA Fn2, 0xEB Fn3, 0xEC profile cycle, 0xED/0xEE IME, 0xEF–0xF1
+Lang 3–5, 0xF2 Ro, 0xF3 Kana, 0xF4 Yen, 0xF5 Henkan, 0xF6 Muhenkan, 0xFF
+none. Full table: `crates/wooting-proto/src/keycode.rs`.
 
 ## Profiles (create / delete, Wootility v5.4)
 
@@ -158,12 +166,16 @@ row5: 63 66 65 ff 29 ff 29 ff 29 ff 69 77 67 e7       Ctrl Win Alt Space×3 Alt 
 
 The space bar occupies matrix cells (5,4), (5,6), (5,8).
 
+## Commands beyond 59
+
+61 GetRtKeys (per-key rapid trigger list), 62 GetProfileCount, 63
+DeleteProfile(p3=slot), 64 CreateProfile(p3=slot), 72 PostSaveProfile,
+73/74 analog polling (168-byte report id 3), 82 GetDefaultProfile, 83
+GetSwitchTable.
+
 ## Open items
 
-- Names of the media/special key codes (0xC0…, 0xE0…), the 0x12/0x15/0x1D
-  reports and the 0x1B blob.
-- Writing mod-tap / DKS / gamepad entries (0x18 format is known for mod-tap;
-  no write path yet).
-- RGB effect layer schema inside `RgbProfileCore.effects`.
-- Whether a RAM-only (flags 0) KeyboardProfile write takes effect without a
-  profile reload; Wootility relies on it, we could not observe it.
+- The 0x12 report and the 0x1B blob contents.
+- Gamepad button mapping / analog curve writes (`GetGamepadMapping` 40,
+  `GetGamepadProfile` 41) — only the mode toggle is implemented.
+- Effect parameter semantics beyond what Wootility's presets write.

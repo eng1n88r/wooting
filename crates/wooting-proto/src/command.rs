@@ -147,7 +147,13 @@ mod tests {
         for c in Command::ALL {
             assert_eq!(Command::from_u8(*c as u8), Some(*c));
         }
-        assert_eq!(Command::ALL[..60].iter().map(|c| *c as usize).collect::<Vec<_>>(), (0..60).collect::<Vec<_>>());
+        assert_eq!(
+            Command::ALL[..60]
+                .iter()
+                .map(|c| *c as usize)
+                .collect::<Vec<_>>(),
+            (0..60).collect::<Vec<_>>()
+        );
         assert_eq!(Command::from_u8(63), Some(Command::DeleteProfile));
     }
 

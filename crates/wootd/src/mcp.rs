@@ -25,7 +25,10 @@ fn tool_name(method: &str) -> String {
 /// Reverse of [`tool_name`], resolved against the method table because
 /// method names may themselves contain underscores (`rgb.set_key`).
 fn method_name(tool: &str) -> Option<&'static str> {
-    methods().into_iter().map(|m| m.name).find(|m| tool_name(m) == tool)
+    methods()
+        .into_iter()
+        .map(|m| m.name)
+        .find(|m| tool_name(m) == tool)
 }
 
 #[derive(Clone)]
@@ -101,7 +104,7 @@ pub async fn serve_stdio(socket: PathBuf, device: Option<String>) -> Result<()> 
         }
         Err(_) => {
             tracing::info!("no daemon socket; opening keyboard directly");
-            Backend::Local(Api::new(device))
+            Backend::Local(Box::new(Api::new(device)))
         }
     };
     let server = WootingMcp {

@@ -21,7 +21,16 @@ pub struct ThemeColors {
 
 /// Keys that count as modifiers for theming.
 const MODIFIERS: &[&str] = &[
-    "lshift", "rshift", "lctrl", "rctrl", "lalt", "ralt", "lgui", "capslock", "tab", "backspace",
+    "lshift",
+    "rshift",
+    "lctrl",
+    "rctrl",
+    "lalt",
+    "ralt",
+    "lgui",
+    "capslock",
+    "tab",
+    "backspace",
     "menu",
 ];
 
@@ -37,7 +46,10 @@ pub fn load_theme(dir: &Path) -> Result<ThemeColors> {
     let table: HashMap<String, toml::Value> =
         toml::from_str(&text).map_err(|e| Error::Other(format!("colors.toml: {e}")))?;
     let get = |k: &str| -> Option<Rgb> {
-        table.get(k).and_then(|v| v.as_str()).and_then(Rgb::parse_hex)
+        table
+            .get(k)
+            .and_then(|v| v.as_str())
+            .and_then(Rgb::parse_hex)
     };
     let keyboard_rgb = std::fs::read_to_string(dir.join("keyboard.rgb"))
         .ok()

@@ -49,7 +49,10 @@ impl Client {
             code: -32002,
             message: format!("daemon connection: {e}"),
         };
-        self.stream.get_mut().write_all(line.as_bytes()).map_err(io_err)?;
+        self.stream
+            .get_mut()
+            .write_all(line.as_bytes())
+            .map_err(io_err)?;
         let mut resp = String::new();
         self.stream.read_line(&mut resp).map_err(io_err)?;
         if resp.is_empty() {
@@ -76,7 +79,7 @@ impl Client {
 /// local [`crate::api::Api`] when no daemon is running.
 pub enum Backend {
     Daemon(Client),
-    Local(crate::api::Api),
+    Local(Box<crate::api::Api>),
 }
 
 impl Backend {
@@ -84,7 +87,7 @@ impl Backend {
     pub fn auto(selector: Option<String>) -> Backend {
         match Client::connect(&default_socket_path()) {
             Ok(c) => Backend::Daemon(c),
-            Err(_) => Backend::Local(crate::api::Api::new(selector)),
+            Err(_) => Backend::Local(Box::new(crate::api::Api::new(selector))),
         }
     }
 

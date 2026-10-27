@@ -130,7 +130,11 @@ mod tests {
 
     #[test]
     fn solid_image_gives_solid_frame() {
-        let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 32, image::Rgb([200, 100, 50])));
+        let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            64,
+            32,
+            image::Rgb([200, 100, 50]),
+        ));
         let layout = Layout::sixty_he();
         let opts = ImageOptions {
             gamma: 1.0,
@@ -138,16 +142,26 @@ mod tests {
         };
         let f = frame_from_image(&img, &layout, &opts);
         let esc = layout.key("esc").unwrap().cells[0];
-        assert_eq!(f.get(esc[0] as usize, esc[1] as usize), Some(Rgb::new(200, 100, 50)));
+        assert_eq!(
+            f.get(esc[0] as usize, esc[1] as usize),
+            Some(Rgb::new(200, 100, 50))
+        );
         let space = layout.key("space").unwrap().cells[2];
-        assert_eq!(f.get(space[0] as usize, space[1] as usize), Some(Rgb::new(200, 100, 50)));
+        assert_eq!(
+            f.get(space[0] as usize, space[1] as usize),
+            Some(Rgb::new(200, 100, 50))
+        );
     }
 
     #[test]
     fn left_right_gradient_maps_across_keys() {
         let mut img = image::RgbImage::new(150, 50);
         for (x, _, p) in img.enumerate_pixels_mut() {
-            *p = image::Rgb([if x < 75 { 255 } else { 0 }, 0, if x < 75 { 0 } else { 255 }]);
+            *p = image::Rgb([
+                if x < 75 { 255 } else { 0 },
+                0,
+                if x < 75 { 0 } else { 255 },
+            ]);
         }
         let layout = Layout::sixty_he();
         let opts = ImageOptions {

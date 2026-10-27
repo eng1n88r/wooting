@@ -33,16 +33,25 @@ impl From<Error> for ApiError {
             Error::Hid(wooting_hid::Error::NotFound) => -32001,
             _ => -32000,
         };
-        ApiError { code, message: e.to_string() }
+        ApiError {
+            code,
+            message: e.to_string(),
+        }
     }
 }
 
 impl ApiError {
     pub fn invalid(msg: impl Into<String>) -> ApiError {
-        ApiError { code: -32602, message: msg.into() }
+        ApiError {
+            code: -32602,
+            message: msg.into(),
+        }
     }
     pub fn method_not_found(name: &str) -> ApiError {
-        ApiError { code: -32601, message: format!("unknown method {name:?}") }
+        ApiError {
+            code: -32601,
+            message: format!("unknown method {name:?}"),
+        }
     }
 }
 
@@ -71,9 +80,7 @@ pub fn methods() -> Vec<MethodInfo> {
     let slot = json!({"type": "integer", "minimum": 0, "description": "Profile slot; default = active profile"});
     let persist = json!({"type": "boolean", "description": PERSIST_DOC});
     let layer = json!({"type": "integer", "minimum": 0, "maximum": 3, "description": "0 = main, 1-3 = Fn layers"});
-    let obj = |props: Value, required: &[&str]| {
-        json!({"type": "object", "properties": props, "required": required, "additionalProperties": false})
-    };
+    let obj = |props: Value, required: &[&str]| json!({"type": "object", "properties": props, "required": required, "additionalProperties": false});
     vec![
         MethodInfo { name: "device.info", description: "Model, serial, firmware, active profile, direct-RGB state and the active profile's draft status (dirty/undo/redo).", params: obj(json!({}), &[]) },
         MethodInfo { name: "device.keys", description: "List key ids (for rgb.set_keys, keymap.*, actuation.keys.*) with labels and positions.", params: obj(json!({}), &[]) },
@@ -127,6 +134,10 @@ pub fn methods() -> Vec<MethodInfo> {
         MethodInfo { name: "advanced_keys.set", description: "Add or replace an advanced key. kind=mod_tap {tap,hold} | toggle {code} | rappy_snappy {other_key} | socd {other_key, mode} | dks {codes:[4 names], masks:[4 ints]?}.", params: obj(json!({"key": {"type": "string"}, "kind": {"type": "string", "enum": ["mod_tap", "toggle", "rappy_snappy", "socd", "dks"]}, "tap": {"type": "string"}, "hold": {"type": "string"}, "code": {"type": "string"}, "other_key": {"type": "string"}, "mode": {"type": "integer"}, "codes": {"type": "array", "items": {"type": "string"}}, "masks": {"type": "array", "items": {"type": "integer"}}, "slot": slot, "persist": persist}), &["key", "kind"]) },
         MethodInfo { name: "advanced_keys.set_mod_tap", description: "Shortcut for advanced_keys.set kind=mod_tap.", params: obj(json!({"key": {"type": "string"}, "hold": {"type": "string"}, "tap": {"type": "string"}, "slot": slot, "persist": persist}), &["key", "hold", "tap"]) },
         MethodInfo { name: "advanced_keys.remove", description: "Remove the advanced-key entry from a key.", params: obj(json!({"key": {"type": "string"}, "slot": slot, "persist": persist}), &["key"]) },
+        MethodInfo { name: "links.list", description: "Linked profiles (daemon only): rules that switch the profile when a Hyprland window gets focus, from ~/.config/wooting/links.toml.", params: obj(json!({}), &[]) },
+        MethodInfo { name: "links.add", description: "Add a linked-profile rule: class and/or title substring → profile name or slot.", params: obj(json!({"class": {"type": "string"}, "title": {"type": "string"}, "profile": {"type": "string"}}), &["profile"]) },
+        MethodInfo { name: "links.remove", description: "Remove rule by index.", params: obj(json!({"index": {"type": "integer"}}), &["index"]) },
+        MethodInfo { name: "links.default", description: "Profile to use when no rule matches (omit to clear).", params: obj(json!({"profile": {"type": "string"}}), &[]) },
         MethodInfo { name: "backup.create", description: "Dump every readable profile/setting to a JSON file and return its path.", params: obj(json!({}), &[]) },
         MethodInfo { name: "raw.command", description: "Send a raw feature command by name or id with up to 4 byte params. Dangerous commands need confirm=true.", params: obj(json!({"command": {"type": "string"}, "params": {"type": "array", "items": {"type": "integer"}, "maxItems": 4}, "confirm": {"type": "boolean"}}), &["command"]) },
     ]
@@ -141,7 +152,11 @@ pub struct Api {
 
 impl Api {
     pub fn new(selector: Option<String>) -> Api {
-        Api { selector, kb: Mutex::new(None), drafts: Mutex::new(HashMap::new()) }
+        Api {
+            selector,
+            kb: Mutex::new(None),
+            drafts: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Run `f` against the keyboard, (re)opening it on demand. A HID error
@@ -194,10 +209,10 @@ impl Api {
             let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
             let layout = kb.layout().clone();
             let mut drafts = self.drafts.lock().unwrap_or_else(|p| p.into_inner());
-            if !drafts.contains_key(&slot) {
-                drafts.insert(slot, Draft::load(kb, slot)?);
-            }
-            let d = drafts.get_mut(&slot).expect("inserted");
+            let d = match drafts.entry(slot) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => e.insert(Draft::load(kb, slot)?),
+            };
             d.edit(kb, |data| f(data, &layout))?;
             if persist {
                 d.save(kb)?;
@@ -206,21 +221,28 @@ impl Api {
         })
     }
 
-    fn draft_op(&self, slot: Option<u8>, op: fn(&mut Draft, &Keyboard) -> Result<bool>) -> Result<(u8, bool, DraftStatus)> {
+    fn draft_op(
+        &self,
+        slot: Option<u8>,
+        op: fn(&mut Draft, &Keyboard) -> Result<bool>,
+    ) -> Result<(u8, bool, DraftStatus)> {
         self.with_keyboard(|kb| {
             let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
             let mut drafts = self.drafts.lock().unwrap_or_else(|p| p.into_inner());
-            if !drafts.contains_key(&slot) {
-                drafts.insert(slot, Draft::load(kb, slot)?);
-            }
-            let d = drafts.get_mut(&slot).expect("inserted");
+            let d = match drafts.entry(slot) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => e.insert(Draft::load(kb, slot)?),
+            };
             let changed = op(d, kb)?;
             Ok((slot, changed, d.status()))
         })
     }
 
     fn forget_draft(&self, slot: u8) {
-        self.drafts.lock().unwrap_or_else(|p| p.into_inner()).remove(&slot);
+        self.drafts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&slot);
     }
 
     pub fn call(&self, method: &str, params: Value) -> ApiResult {
@@ -697,13 +719,14 @@ impl Api {
                     }))
                 }).map_err(Into::into)
             }
+            m if m.starts_with("links.") => Err(ApiError { code: -32601, message: "linked profiles need the wootd daemon".into() }),
             other => Err(ApiError::method_not_found(other)),
         }
     }
 }
 
 fn global_json(g: &pb::GlobalSettings) -> Value {
-    let ps = g.power_saving.clone().unwrap_or_default();
+    let ps = g.power_saving.unwrap_or_default();
     json!({
         "dim_after_minutes": ps.dim_after_minutes.unwrap_or(0),
         "off_after_minutes": ps.off_after_minutes.unwrap_or(0),
@@ -718,7 +741,8 @@ fn parse_rows(v: &Value) -> Result<Rows> {
         for (c, cell) in row.as_array().into_iter().flatten().take(COLS).enumerate() {
             rows[r][c] = match cell {
                 Value::Number(n) => n.as_u64().unwrap_or(255) as u8,
-                Value::String(s) => keycode::parse(s).ok_or_else(|| Error::Other(format!("unknown key code {s:?}")))?,
+                Value::String(s) => keycode::parse(s)
+                    .ok_or_else(|| Error::Other(format!("unknown key code {s:?}")))?,
                 _ => keycode::NONE,
             };
         }
@@ -726,14 +750,24 @@ fn parse_rows(v: &Value) -> Result<Rows> {
     Ok(rows)
 }
 
-fn mapping_json(layout: &Layout, slot: u8, layer: u8, rows: &Rows, stored: bool, st: &DraftStatus) -> Value {
+fn mapping_json(
+    layout: &Layout,
+    slot: u8,
+    layer: u8,
+    rows: &Rows,
+    stored: bool,
+    st: &DraftStatus,
+) -> Value {
     let keys: serde_json::Map<String, Value> = layout
         .keys
         .iter()
         .map(|k| {
             let c = k.cells[0];
             let code = rows[c[0] as usize][c[1] as usize];
-            (k.id.clone(), json!({"code": code, "name": keycode::name(code), "label": keycode::label(code)}))
+            (
+                k.id.clone(),
+                json!({"code": code, "name": keycode::name(code), "label": keycode::label(code)}),
+            )
         })
         .collect();
     json!({"slot": slot, "layer": layer, "stored": stored, "keys": keys, "rows": rows.iter().map(|r| r.to_vec()).collect::<Vec<_>>(), "draft": st})
@@ -745,7 +779,9 @@ fn frame_json(f: &Frame) -> Value {
 
 fn expand_home(p: &str) -> String {
     match p.strip_prefix("~/") {
-        Some(rest) => dirs::home_dir().map(|h| h.join(rest).to_string_lossy().into_owned()).unwrap_or_else(|| p.to_string()),
+        Some(rest) => dirs::home_dir()
+            .map(|h| h.join(rest).to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.to_string()),
         None => p.to_string(),
     }
 }
@@ -754,7 +790,8 @@ struct Params(Value);
 
 impl Params {
     fn string(&self, k: &str) -> std::result::Result<String, ApiError> {
-        self.opt_string(k).ok_or_else(|| ApiError::invalid(format!("missing string param {k:?}")))
+        self.opt_string(k)
+            .ok_or_else(|| ApiError::invalid(format!("missing string param {k:?}")))
     }
     fn opt_string(&self, k: &str) -> Option<String> {
         self.0.get(k).and_then(Value::as_str).map(str::to_owned)
@@ -769,16 +806,23 @@ impl Params {
         }
     }
     fn u8(&self, k: &str) -> std::result::Result<u8, ApiError> {
-        self.0.get(k).and_then(Value::as_u64).filter(|v| *v < 256).map(|v| v as u8)
+        self.0
+            .get(k)
+            .and_then(Value::as_u64)
+            .filter(|v| *v < 256)
+            .map(|v| v as u8)
             .ok_or_else(|| ApiError::invalid(format!("param {k:?} must be an integer 0-255")))
     }
     fn keycode(&self, k: &str) -> std::result::Result<u8, ApiError> {
         let s = self.string(k)?;
-        keycode::parse(&s).ok_or_else(|| ApiError::invalid(format!("{k}: unknown key code {s:?}; see keycodes.list")))
+        keycode::parse(&s).ok_or_else(|| {
+            ApiError::invalid(format!("{k}: unknown key code {s:?}; see keycodes.list"))
+        })
     }
     fn color(&self, k: &str) -> std::result::Result<Rgb, ApiError> {
         let s = self.string(k)?;
-        Rgb::parse_hex(&s).ok_or_else(|| ApiError::invalid(format!("{k}: bad colour {s:?}, expected #rrggbb")))
+        Rgb::parse_hex(&s)
+            .ok_or_else(|| ApiError::invalid(format!("{k}: bad colour {s:?}, expected #rrggbb")))
     }
     fn opt_color(&self, k: &str) -> std::result::Result<Option<Rgb>, ApiError> {
         match self.opt_string(k) {
@@ -787,21 +831,39 @@ impl Params {
         }
     }
     fn color_map(&self, k: &str) -> std::result::Result<Vec<(String, Rgb)>, ApiError> {
-        let map = self.0.get(k).and_then(Value::as_object).ok_or_else(|| ApiError::invalid(format!("{k} must be an object")))?;
+        let map = self
+            .0
+            .get(k)
+            .and_then(Value::as_object)
+            .ok_or_else(|| ApiError::invalid(format!("{k} must be an object")))?;
         let mut pairs = Vec::new();
         for (key, v) in map {
-            let s = v.as_str().ok_or_else(|| ApiError::invalid(format!("colour for {key} must be a string")))?;
-            pairs.push((key.clone(), Rgb::parse_hex(s).ok_or_else(|| ApiError::invalid(format!("bad colour {s:?}")))?));
+            let s = v
+                .as_str()
+                .ok_or_else(|| ApiError::invalid(format!("colour for {key} must be a string")))?;
+            pairs.push((
+                key.clone(),
+                Rgb::parse_hex(s).ok_or_else(|| ApiError::invalid(format!("bad colour {s:?}")))?,
+            ));
         }
         Ok(pairs)
     }
     fn frame(&self, k: &str) -> std::result::Result<Frame, ApiError> {
-        let rows = self.0.get(k).and_then(Value::as_array).ok_or_else(|| ApiError::invalid(format!("{k} must be an array")))?;
+        let rows = self
+            .0
+            .get(k)
+            .and_then(Value::as_array)
+            .ok_or_else(|| ApiError::invalid(format!("{k} must be an array")))?;
         let mut frame = Frame::default();
         for (r, row) in rows.iter().take(ROWS).enumerate() {
             for (c, v) in row.as_array().into_iter().flatten().take(COLS).enumerate() {
                 if let Some(s) = v.as_str() {
-                    frame.set(r, c, Rgb::parse_hex(s).ok_or_else(|| ApiError::invalid(format!("bad colour {s:?}")))?);
+                    frame.set(
+                        r,
+                        c,
+                        Rgb::parse_hex(s)
+                            .ok_or_else(|| ApiError::invalid(format!("bad colour {s:?}")))?,
+                    );
                 }
             }
         }

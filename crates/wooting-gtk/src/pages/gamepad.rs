@@ -49,7 +49,10 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
         let c = c.clone();
         let on = s.is_active();
         spawn(async move {
-            if c.call("settings.device.set", json!({"gamepad_mode": on})).await.is_some() {
+            if c.call("settings.device.set", json!({"gamepad_mode": on}))
+                .await
+                .is_some()
+            {
                 c.toast("Keyboard restarting…");
             }
         });

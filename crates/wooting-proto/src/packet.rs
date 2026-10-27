@@ -129,7 +129,11 @@ mod tests {
 
     #[test]
     fn arm_packet_layout() {
-        let p = CommandPacket::new(Protocol::Arm, Command::WootDevSingleColor, [0x25, 10, 20, 30]);
+        let p = CommandPacket::new(
+            Protocol::Arm,
+            Command::WootDevSingleColor,
+            [0x25, 10, 20, 30],
+        );
         assert_eq!(p.bytes(), &[1, 0xD1, 0xDA, 30, 30, 20, 10, 0x25]);
     }
 
@@ -149,7 +153,10 @@ mod tests {
         assert_eq!(r.data(), &[2, 14, 1]);
         assert!(matches!(
             Response::parse(vec![1, 0xD1, 0xDA, 3, 0, 0], Command::GetVersion),
-            Err(ResponseError::WrongCommand { expected: 1, got: 3 })
+            Err(ResponseError::WrongCommand {
+                expected: 1,
+                got: 3
+            })
         ));
     }
 }

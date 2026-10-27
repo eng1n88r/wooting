@@ -18,7 +18,10 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     row.set_homogeneous(true);
 
-    let (set_card, set) = card("Set Actuation Point", Some("Customise the exact distance a key must be pressed before it registers a keypress."));
+    let (set_card, set) = card(
+        "Set Actuation Point",
+        Some("Customise the exact distance a key must be pressed before it registers a keypress."),
+    );
     let count = gtk::Label::new(Some("Changing actuation point for 0 keys"));
     count.set_xalign(0.0);
     count.add_css_class("accent");
@@ -37,7 +40,10 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     set.append(&btns);
     row.append(&set_card);
 
-    let (fb_card, fb) = card("Visual Feedback", Some("Press a key to test the actuation point. The bar fills with the key's travel."));
+    let (fb_card, fb) = card(
+        "Visual Feedback",
+        Some("Press a key to test the actuation point. The bar fills with the key's travel."),
+    );
     let fb_switch = gtk::Switch::new();
     fb_switch.set_halign(gtk::Align::Start);
     let fb_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -61,9 +67,18 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
         let cnt = cnt.clone();
         let sc = sc.clone();
         spawn(async move {
-            let Some((s, per_key, _)) = super::load_values_overlay(&c).await else { return };
+            let Some((s, per_key, _)) = super::load_values_overlay(&c).await else {
+                return;
+            };
             let sel = c.view.selected();
-            cnt.set_text(&format!("Changing actuation point for {} keys", if sel.is_empty() { "all".to_string() } else { sel.len().to_string() }));
+            cnt.set_text(&format!(
+                "Changing actuation point for {} keys",
+                if sel.is_empty() {
+                    "all".to_string()
+                } else {
+                    sel.len().to_string()
+                }
+            ));
             if let Some(first) = sel.first() {
                 if let Some(mm) = per_key["keys"][first].as_f64() {
                     sc.set_value(mm);
@@ -87,7 +102,8 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
             if sel.is_empty() {
                 c.edit("settings.set", json!({"actuation_mm": mm})).await;
             } else {
-                let keys: serde_json::Map<String, serde_json::Value> = sel.into_iter().map(|k| (k, json!(mm))).collect();
+                let keys: serde_json::Map<String, serde_json::Value> =
+                    sel.into_iter().map(|k| (k, json!(mm))).collect();
                 c.edit("actuation.keys.set", json!({"keys": keys})).await;
             }
             c.refresh_page();
@@ -99,10 +115,21 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
         spawn(async move {
             let sel = c.view.selected();
             let keys: serde_json::Map<String, serde_json::Value> = if sel.is_empty() {
-                let Some(v) = c.call("actuation.keys.get", json!({})).await else { return };
-                v["keys"].as_object().map(|m| m.keys().map(|k| (k.clone(), serde_json::Value::Null)).collect()).unwrap_or_default()
+                let Some(v) = c.call("actuation.keys.get", json!({})).await else {
+                    return;
+                };
+                v["keys"]
+                    .as_object()
+                    .map(|m| {
+                        m.keys()
+                            .map(|k| (k.clone(), serde_json::Value::Null))
+                            .collect()
+                    })
+                    .unwrap_or_default()
             } else {
-                sel.into_iter().map(|k| (k, serde_json::Value::Null)).collect()
+                sel.into_iter()
+                    .map(|k| (k, serde_json::Value::Null))
+                    .collect()
             };
             if !keys.is_empty() {
                 c.edit("actuation.keys.set", json!({"keys": keys})).await;

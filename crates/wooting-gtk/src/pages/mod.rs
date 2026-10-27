@@ -23,9 +23,18 @@ pub async fn load_values_overlay(ctx: &Ctx) -> Option<(Value, Value, Value)> {
     let rt_all = settings["rapid_trigger"].as_bool().unwrap_or(false);
     let overrides: HashMap<String, f64> = per_key["keys"]
         .as_object()
-        .map(|m| m.iter().filter_map(|(k, v)| v.as_f64().map(|f| (k.clone(), f))).collect())
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_f64().map(|f| (k.clone(), f)))
+                .collect()
+        })
         .unwrap_or_default();
-    let rt_keys: HashSet<String> = rt["keys"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+    let rt_keys: HashSet<String> = rt["keys"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
     let mut st = ctx.view.state.borrow_mut();
     st.values.clear();
     st.marked.clear();
