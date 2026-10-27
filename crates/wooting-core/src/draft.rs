@@ -28,8 +28,10 @@ pub struct ProfileData {
     pub rgb: Frame,
     pub core: pb::RgbProfileCore,
     pub akc: pb::AdvancedKeys,
-    /// Analog curve (report 0x13) kept verbatim.
-    pub curve: Vec<u8>,
+    /// Gamepad analog curve + joystick options (report 0x13).
+    pub gamepad: pb::GamepadProfile,
+    /// Keys acting as controller buttons (report 0x12).
+    pub gamepad_mapping: pb::GamepadMapping,
 }
 
 impl ProfileData {
@@ -51,11 +53,14 @@ impl Keyboard {
         for layer in 0..4u8 {
             mapping.push(self.mapping(slot, layer)?);
         }
-        let curve = self
-            .transport()
-            .command(Command::GetGamepadProfile, [0, 0, 0, slot])
-            .map(|r| r.data().to_vec())
-            .unwrap_or_default();
+        let gamepad = match self.cmd(Command::GetGamepadProfile, [0, 0, 0, slot]) {
+            Ok(r) if !r.data().is_empty() => pb::GamepadProfile::decode(r.data())?,
+            _ => wooting_proto::gamepad::default_profile(),
+        };
+        let gamepad_mapping = match self.cmd(Command::GetGamepadMapping, [0, 0, 0, slot]) {
+            Ok(r) if !r.data().is_empty() => pb::GamepadMapping::decode(r.data())?,
+            _ => pb::GamepadMapping::default(),
+        };
         Ok(ProfileData {
             meta,
             keyboard: self.keyboard_profile(slot)?,
@@ -65,7 +70,8 @@ impl Keyboard {
             rgb: self.read_rgb_profile(slot)?,
             core: self.rgb_core(slot)?,
             akc: self.advanced_keys_raw(slot)?,
-            curve,
+            gamepad,
+            gamepad_mapping,
         })
     }
 
@@ -100,21 +106,8 @@ impl Keyboard {
         }
         self.report_pb(report::kind::RT_KEYS, flags, &data.rt_keys)?;
         self.report_pb(report::kind::KEYBOARD_PROFILE, flags, &data.keyboard)?;
-        if !data.curve.is_empty() {
-            let bytes = report::build(
-                self.transport().protocol(),
-                report::kind::ANALOG_CURVE,
-                flags,
-                &data.curve,
-            )
-            .ok_or_else(|| crate::Error::Other("curve too large".into()))?;
-            self.transport().write_report(&bytes)?;
-        }
-        self.report_pb(
-            report::kind::UNKNOWN_12,
-            flags,
-            &pb::MappingProfile::default(),
-        )?;
+        self.report_pb(report::kind::GAMEPAD_PROFILE, flags, &data.gamepad)?;
+        self.report_pb(report::kind::GAMEPAD_MAPPING, flags, &data.gamepad_mapping)?;
         for (layer, rows) in data.mapping.iter().enumerate() {
             let payload = rows
                 .map(|r| {
@@ -287,7 +280,7 @@ impl Draft {
 
 use crate::keyboard::{code_to_mm, mm_to_code, AdvancedKey, KeyboardSettings};
 use crate::Error;
-use wooting_proto::{keycode, rgb::matrix_id, Layout, Rgb};
+use wooting_proto::{gamepad, keycode, rgb::matrix_id, Layout, Rgb};
 
 fn key_cells<'a>(layout: &'a Layout, id: &str) -> Result<&'a wooting_proto::Key> {
     layout
@@ -530,6 +523,115 @@ impl ProfileData {
         self.akc.f2.get_or_insert(0);
         self.akc.count = Some(self.akc.entries.len() as u32);
         Ok(())
+    }
+
+    // ----- gamepad -----------------------------------------------------------
+
+    /// Keys mapped to controller buttons: `(key id, button name)`.
+    pub fn gamepad_buttons(&self, layout: &Layout) -> Vec<(String, String)> {
+        self.gamepad_mapping
+            .layer
+            .as_ref()
+            .and_then(|l| l.keys.as_ref())
+            .map(|k| {
+                k.key
+                    .iter()
+                    .map(|v| {
+                        (
+                            key_for_matrix(layout, (v & 0xff) as u8),
+                            gamepad::name((v >> 8) as u8),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn gamepad_keys_mut(&mut self) -> &mut pb::gamepad_mapping::Keys {
+        self.gamepad_mapping.override_keys.get_or_insert(0);
+        let layer = self
+            .gamepad_mapping
+            .layer
+            .get_or_insert_with(Default::default);
+        layer.keys.get_or_insert_with(Default::default)
+    }
+
+    /// Map keys to buttons (`None` removes the button from the key).
+    pub fn set_gamepad_buttons(
+        &mut self,
+        layout: &Layout,
+        changes: &[(String, Option<u8>)],
+    ) -> Result<()> {
+        for (id, button) in changes {
+            for c in &key_cells(layout, id)?.cells {
+                let mid = matrix_id(c[0], c[1]) as u32;
+                let keys = self.gamepad_keys_mut();
+                keys.key.retain(|v| v & 0xff != mid);
+                if let Some(b) = button {
+                    keys.key.push(((*b as u32) << 8) | mid);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn gamepad_override(&self) -> bool {
+        self.gamepad_mapping.override_keys.unwrap_or(0) != 0
+    }
+
+    pub fn set_gamepad_override(&mut self, on: bool) {
+        self.gamepad_keys_mut();
+        self.gamepad_mapping.override_keys = Some(on as u32);
+    }
+
+    /// "Enable keyboard keys": whether keys with a gamepad button still type.
+    pub fn gamepad_keyboard_keys(&self) -> bool {
+        self.keyboard
+            .payload
+            .as_ref()
+            .and_then(|p| p.keyboard_keys)
+            .unwrap_or(1)
+            != 0
+    }
+
+    pub fn set_gamepad_keyboard_keys(&mut self, on: bool) {
+        let p = self.keyboard.payload.get_or_insert_with(Default::default);
+        p.keyboard_keys = Some(on as u32);
+    }
+
+    pub fn gamepad_curve(&self) -> Vec<(u32, u32)> {
+        gamepad::curve_points(&self.gamepad)
+    }
+
+    pub fn set_gamepad_curve(&mut self, points: &[(u32, u32)]) -> Result<()> {
+        if points.len() != 4 || points.iter().any(|(x, y)| *x > 255 || *y > 255) {
+            return Err(Error::Other(
+                "a curve has exactly 4 points with x, y in 0..=255".into(),
+            ));
+        }
+        gamepad::set_curve(&mut self.gamepad, points);
+        Ok(())
+    }
+
+    /// Anti-deadzone = y of the first curve point.
+    pub fn set_gamepad_deadzone(&mut self, y: u32) -> Result<()> {
+        let mut pts = self.gamepad_curve();
+        if pts.len() != 4 {
+            pts = gamepad::preset("linear").unwrap().to_vec();
+        }
+        pts[0].1 = y.min(255);
+        self.set_gamepad_curve(&pts)
+    }
+
+    pub fn gamepad_settings_mut(&mut self) -> &mut pb::gamepad_profile::Settings {
+        self.gamepad
+            .settings
+            .get_or_insert_with(|| pb::gamepad_profile::Settings {
+                angle_enabled: Some(0),
+                square: Some(0),
+                snappy: Some(1),
+                angle: Some(50),
+            })
     }
 
     pub fn matrix_of(&self, layout: &Layout, key_id: &str) -> Result<u32> {

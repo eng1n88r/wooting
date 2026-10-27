@@ -97,6 +97,9 @@ woot akc modtap capslock --tap esc --hold lctrl   woot akc socd a d --mode 1
 woot profile create "FPS"          woot profile swap 0 3    woot profile export 2 fps.json
 woot profile status / save / discard / undo / redo         (daemon drafts)
 woot settings --dim 5 --off 30 --debounce true --compat false
+woot gamepad map w=ls_up a=ls_left s=ls_down d=ls_right space=a
+woot gamepad curve aggro --deadzone 30   woot gamepad joystick --square on --angle on --degrees 60
+woot settings --polling 250 --controller xbox
 woot links add --class cs2 "Rapid Profile"                 woot backup   woot methods
 ```
 
@@ -109,8 +112,10 @@ woot links add --class cs2 "Rapid Profile"                 woot backup   woot me
   the full key palette, global and per-key actuation, rapid trigger
   (per key, split, continuous), Tachyon, all advanced key kinds (DKS,
   mod-tap, toggle, Rappy Snappy, SOCD), device settings (6KRO, Num Lock,
-  debounce, power saving, factory reset), gamepad mode toggle, linked
-  profiles via Hyprland, daemon, HTTP, MCP, CLI, GTK app.
+  debounce, power saving, factory reset), gamepad (mode, polling rate,
+  controller type, button mapping, keyboard-keys / override, analog curve
+  presets and points, anti-deadzone, angle / square / snappy joystick),
+  linked profiles via Hyprland, daemon, HTTP, MCP, CLI, GTK app.
 - Protocol notes and the Wootility captures they came from: `docs/`.
-- Not yet: gamepad button mapping / analog curve editor, firmware updates,
-  Wooting cloud features.
+- Not yet: "Classic" controller button codes, firmware updates, Wooting
+  cloud features.

@@ -6,6 +6,7 @@
 //! community protocol notes and dumps from a 60HE+; see `docs/protocol.md`.
 
 pub mod command;
+pub mod gamepad;
 pub mod keycode;
 pub mod layout;
 pub mod model;

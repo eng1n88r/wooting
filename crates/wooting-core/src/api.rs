@@ -18,7 +18,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::PathBuf, sync::Mutex};
-use wooting_proto::{keycode, pb, Command, Frame, Layout, Rgb, COLS, ROWS};
+use wooting_proto::{gamepad, keycode, pb, Command, Frame, Layout, Rgb, COLS, ROWS};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
@@ -121,8 +121,12 @@ pub fn methods() -> Vec<MethodInfo> {
         MethodInfo { name: "rapid_trigger.keys.set", description: "Enable/disable rapid trigger per key: {\"keys\": {\"w\": true, \"a\": false}}.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": "boolean"}}, "slot": slot, "persist": persist}), &["keys"]) },
         MethodInfo { name: "settings.global.get", description: "Device-wide settings: RGB power saving timers, inverted Num Lock indicator, debounce filter.", params: obj(json!({}), &[]) },
         MethodInfo { name: "settings.global.set", description: "Set device-wide settings: minutes until lighting dims / turns off (0 = never), numlock_inverted, debounce_filter.", params: obj(json!({"dim_after_minutes": {"type": "integer"}, "off_after_minutes": {"type": "integer"}, "numlock_inverted": {"type": "boolean"}, "debounce_filter": {"type": "boolean"}}), &[]) },
-        MethodInfo { name: "settings.device.get", description: "Hardware flags: compatibility mode (6KRO) and gamepad mode.", params: obj(json!({}), &[]) },
-        MethodInfo { name: "settings.device.set", description: "Set compatibility mode (6KRO) or gamepad mode. The keyboard restarts; gamepad mode changes its USB identity.", params: obj(json!({"compat_mode": {"type": "boolean"}, "gamepad_mode": {"type": "boolean"}}), &[]) },
+        MethodInfo { name: "settings.device.get", description: "Hardware flags: compatibility mode (6KRO), gamepad mode, gamepad polling rate (250/1000 Hz) and controller type (xbox/classic).", params: obj(json!({}), &[]) },
+        MethodInfo { name: "settings.device.set", description: "Set compatibility mode (6KRO), gamepad mode, gamepad polling rate or controller type. The keyboard restarts; gamepad mode / controller type change its USB identity (PID 0x1320 Xbox, 0x1321 Classic).", params: obj(json!({"compat_mode": {"type": "boolean"}, "gamepad_mode": {"type": "boolean"}, "polling_hz": {"type": "integer", "enum": [250, 1000]}, "controller": {"type": "string", "enum": ["xbox", "classic"]}}), &[]) },
+        MethodInfo { name: "gamepad.get", description: "Gamepad setup of a profile: buttons mapped onto keys ({key_id: button}), override (mapped keys stop typing), keyboard_keys (mapped keys still type), analog curve (4 [x,y] points, 0..255; first y = anti-deadzone), preset name if the curve matches one, angle_enabled/angle (0..100 = 0..90°), square, snappy; plus the device flags.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "gamepad.set", description: "Map controller buttons onto keys: {\"keys\": {\"z\": \"a\", \"x\": null}} (null removes), and/or set override / keyboard_keys. Button names: gamepad.buttons.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": ["string", "null"]}}, "override": {"type": "boolean"}, "keyboard_keys": {"type": "boolean"}, "slot": slot, "persist": persist}), &[]) },
+        MethodInfo { name: "gamepad.curve.set", description: "Analog curve and joystick options: preset (linear|aggro|slow|smooth|steep|instant|turbo) or points [[x,y]×4], deadzone (0..255, y of the first point), angle_enabled, angle (0..100), square, snappy.", params: obj(json!({"preset": {"type": "string"}, "points": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}}, "deadzone": {"type": "integer"}, "angle_enabled": {"type": "boolean"}, "angle": {"type": "integer"}, "square": {"type": "boolean"}, "snappy": {"type": "boolean"}, "slot": slot, "persist": persist}), &[]) },
+        MethodInfo { name: "gamepad.buttons", description: "Controller button names, labels and codes, plus the curve presets.", params: obj(json!({}), &[]) },
         MethodInfo { name: "settings.reset", description: "Reset ALL keyboard settings to factory (ResetSettings). Irreversible; needs confirm=true.", params: obj(json!({"confirm": {"type": "boolean"}}), &[]) },
         MethodInfo { name: "keymap.get", description: "Key mapping of a layer as {key_id: {code, name, label}} plus the raw matrix; stored=false means the factory default is in use.", params: obj(json!({"layer": layer, "slot": slot}), &[]) },
         MethodInfo { name: "keymap.set_key", description: "Remap one key: code is a key name from keycodes.list (e.g. \"esc\", \"f5\", \"lctrl\", \"mouse_left\", \"none\").", params: obj(json!({"key": {"type": "string"}, "code": {"type": "string"}, "layer": layer, "slot": slot, "persist": persist}), &["key", "code"]) },
@@ -583,17 +587,83 @@ impl Api {
                     Ok(global_json(&kb.global_settings()?))
                 }).map_err(Into::into)
             }
-            "settings.device.get" => self.with_keyboard(|kb| Ok(json!({"compat_mode": kb.compat_mode()?, "gamepad_mode": kb.gamepad_mode()?, "raw": kb.device_config()?}))).map_err(Into::into),
+            "settings.device.get" => self.with_keyboard(|kb| Ok(serde_json::to_value(kb.device_settings()?).map_err(|e| Error::Other(e.to_string()))?)).map_err(Into::into),
             "settings.device.set" => {
                 let compat = p.bool("compat_mode");
                 let gamepad = p.bool("gamepad_mode");
+                let polling = p.0.get("polling_hz").and_then(Value::as_u64).map(|v| v as u32);
+                let controller = p.opt_string("controller");
+                let any = compat.is_some() || gamepad.is_some() || polling.is_some() || controller.is_some();
+                if !any {
+                    return Err(ApiError::invalid("nothing to set"));
+                }
                 self.drafts.lock().unwrap_or_else(|p| p.into_inner()).clear();
                 self.with_keyboard(|kb| {
-                    if let Some(c) = compat { kb.set_compat_mode(c)?; }
-                    if let Some(g) = gamepad { kb.set_gamepad_mode(g)?; }
-                    Ok(json!({"ok": true, "restarting": compat.is_some() || gamepad.is_some()}))
+                    kb.set_device_settings(compat, gamepad, polling, controller.as_deref())?;
+                    Ok(json!({"ok": true, "restarting": true}))
                 }).map_err(Into::into)
             }
+            "gamepad.get" => {
+                let (slot, data, layout, st) = self.view(slot)?;
+                let device = self.with_keyboard(|kb| kb.device_settings()).ok();
+                Ok(gamepad_json(slot, &data, &layout, &st, device))
+            }
+            "gamepad.set" => {
+                let keys = p.0.get("keys").and_then(Value::as_object).cloned();
+                let override_keys = p.bool("override");
+                let keyboard_keys = p.bool("keyboard_keys");
+                let (slot, data, layout, st) = self.mutate(slot, persist, |d, l| {
+                    if let Some(keys) = &keys {
+                        let mut changes = Vec::new();
+                        for (k, v) in keys {
+                            let b = match v {
+                                Value::Null => None,
+                                Value::String(s) => Some(gamepad::parse(s).ok_or_else(|| ApiError::invalid(format!("unknown gamepad button {s:?}; see gamepad.buttons")))?),
+                                _ => return Err(ApiError::invalid("keys values must be button names or null").into()),
+                            };
+                            changes.push((k.clone(), b));
+                        }
+                        d.set_gamepad_buttons(l, &changes)?;
+                    }
+                    if let Some(o) = override_keys { d.set_gamepad_override(o); }
+                    if let Some(k) = keyboard_keys { d.set_gamepad_keyboard_keys(k); }
+                    Ok(())
+                })?;
+                Ok(gamepad_json(slot, &data, &layout, &st, None))
+            }
+            "gamepad.curve.set" => {
+                let preset = p.opt_string("preset");
+                let points: Option<Vec<(u32, u32)>> = p.0.get("points").and_then(Value::as_array).map(|pts| {
+                    pts.iter().map(|pt| {
+                        let a = pt.as_array();
+                        (a.and_then(|a| a.first()).and_then(Value::as_u64).unwrap_or(0) as u32, a.and_then(|a| a.get(1)).and_then(Value::as_u64).unwrap_or(0) as u32)
+                    }).collect()
+                });
+                let deadzone = p.0.get("deadzone").and_then(Value::as_u64).map(|v| v as u32);
+                let angle_enabled = p.bool("angle_enabled");
+                let angle = p.0.get("angle").and_then(Value::as_u64).map(|v| v as u32);
+                let square = p.bool("square");
+                let snappy = p.bool("snappy");
+                let (slot, data, layout, st) = self.mutate(slot, persist, |d, _| {
+                    if let Some(name) = &preset {
+                        let pts = gamepad::preset(name).ok_or_else(|| ApiError::invalid(format!("unknown preset {name:?}")))?;
+                        d.set_gamepad_curve(&pts)?;
+                    }
+                    if let Some(pts) = &points { d.set_gamepad_curve(pts)?; }
+                    if let Some(dz) = deadzone { d.set_gamepad_deadzone(dz)?; }
+                    let s = d.gamepad_settings_mut();
+                    if let Some(a) = angle_enabled { s.angle_enabled = Some(a as u32); }
+                    if let Some(a) = angle { s.angle = Some(a.min(100)); }
+                    if let Some(q) = square { s.square = Some(q as u32); }
+                    if let Some(n) = snappy { s.snappy = Some(n as u32); }
+                    Ok(())
+                })?;
+                Ok(gamepad_json(slot, &data, &layout, &st, None))
+            }
+            "gamepad.buttons" => Ok(json!({
+                "buttons": gamepad::BUTTONS.iter().map(|(n, l, c)| json!({"name": n, "label": l, "code": c})).collect::<Vec<_>>(),
+                "presets": gamepad::CURVE_PRESETS.iter().map(|(n, p)| json!({"name": n, "points": p})).collect::<Vec<_>>(),
+            })),
             "settings.reset" => {
                 if !p.bool("confirm").unwrap_or(false) {
                     return Err(ApiError::invalid("resetting the keyboard is irreversible; pass confirm=true"));
@@ -723,6 +793,37 @@ impl Api {
             other => Err(ApiError::method_not_found(other)),
         }
     }
+}
+
+fn gamepad_json(
+    slot: u8,
+    d: &ProfileData,
+    layout: &Layout,
+    st: &DraftStatus,
+    device: Option<crate::keyboard::DeviceSettings>,
+) -> Value {
+    let keys: serde_json::Map<String, Value> = d
+        .gamepad_buttons(layout)
+        .into_iter()
+        .map(|(k, b)| (k, Value::String(b)))
+        .collect();
+    let s = d.gamepad.settings.clone().unwrap_or_default();
+    let curve = d.gamepad_curve();
+    json!({
+        "slot": slot,
+        "keys": keys,
+        "override": d.gamepad_override(),
+        "keyboard_keys": d.gamepad_keyboard_keys(),
+        "curve": curve,
+        "preset": gamepad::preset_name(&curve),
+        "deadzone": curve.first().map(|p| p.1).unwrap_or(0),
+        "angle_enabled": s.angle_enabled.unwrap_or(0) != 0,
+        "angle": s.angle.unwrap_or(50),
+        "square": s.square.unwrap_or(0) != 0,
+        "snappy": s.snappy.unwrap_or(1) != 0,
+        "device": device,
+        "draft": st,
+    })
 }
 
 fn global_json(g: &pb::GlobalSettings) -> Value {

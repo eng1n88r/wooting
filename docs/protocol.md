@@ -89,11 +89,11 @@ messages without them, so our `.proto` declares those fields `optional`.
 
 | type | name | protobuf (`proto/wooting.proto`) |
 |------|------|----------|
-| 0x07 | DeviceConfig | raw 7 bytes, no length: byte0 bit4 = compatibility mode (6KRO), byte6 `0x0C` normal / `0x08` gamepad; followed by `SoftReset(25)` (gamepad re-enumerates as PID 0x1320) |
+| 0x07 | DeviceConfig | raw 7 bytes, no length: byte0 bit4 = compatibility mode (6KRO); byte6 bit2 = gamepad **off**, bit3 = 1000 Hz gamepad polling (clear = 250 Hz), bit1 = "Classic" controller (clear = Xbox). Byte 4 is read-only (0x11 on fw 2.14.2; written as 0). Followed by `SoftReset(25)`; gamepad re-enumerates as PID 0x1320 (Xbox) / 0x1321 (Classic) |
 | 0x0E / 0x0F | RgbProfileColorsPart1/2 | `RgbRows` rows 0..2 / 3..5, packed RGB565; always flags 0, then `SaveRgbProfile(p3=slot)` |
-| 0x11 | KeyboardProfile | `KeyboardProfile`: actuation, rapid trigger, sensitivities, Tachyon, field 7 = 0 → continuous rapid trigger |
-| 0x12 | ? | sent empty around profile writes |
-| 0x13 | AnalogCurve | 4 (x,y) points + extras; constant so far |
+| 0x11 | KeyboardProfile | `KeyboardProfile`: actuation, field 2 = gamepad "Enable keyboard keys", rapid trigger, sensitivities, Tachyon, field 7 = 0 → continuous rapid trigger |
+| 0x12 | GamepadMapping | `GamepadMapping`: field 1 → field 2 → repeated `(button << 8) \| matrix_id`; top-level field 2 = "mapping override" (mapped keys stop typing). Read with `GetGamepadMapping(40, p3=slot)`; the firmware answers with the list packed |
+| 0x13 | GamepadProfile | `GamepadProfile`: 4 curve points (x = travel 0..255 over 0.10–4.00 mm, y = axis 0..255; first y = anti-deadzone) + `Settings { angle_enabled, square, snappy, angle 0..100 (= 0..90°) }`. Read with `GetGamepadProfile(41, p3=slot)` |
 | 0x14 | MappingProfile | 6 rows × 21 key codes per layer (0 main, 1–2 Fn, 3 empty); empty = factory default |
 | 0x15 | PerKey | per-key actuation exceptions: field 4 entries, each `(code << 16) \| matrix_id` |
 | 0x16 | RgbProfileCore | brightness + `Effects` (field 4): layers with a `oneof` effect (wave, scan, breath, cycle, ripple, trail, touch, jelly, aoe, mixing, rt_display, noise, spiral) |
@@ -166,6 +166,21 @@ row5: 63 66 65 ff 29 ff 29 ff 29 ff 69 77 67 e7       Ctrl Win Alt Space×3 Alt 
 
 The space bar occupies matrix cells (5,4), (5,6), (5,8).
 
+## Gamepad (Wootility v5.4, fw 2.14.2, captured 2026-10-27)
+
+Xbox button codes: A 0x78, B 0x79, X 0x7A, Y 0x7B, Start 0x7C, Select 0x7D,
+D-pad up/down/left/right 0x7E–0x81, LB 0x82, RB 0x83, Guide 0x84, left stick
+up/down/left/right 0x85–0x88, right stick up/down/left/right 0x89–0x8C, LS
+press 0x8D, RS press 0x8E, LT 0x8F, RT 0x90 (`crates/wooting-proto/src/gamepad.rs`).
+Every mapping change resends the whole list (report 0x12, flags 0). Curve
+presets (x,y ×4): linear (0,20)(60,60)(194,195)(253,255); aggro
+(0,33)(63,114)(139,231)(253,255); slow (0,23)(128,63)(226,145)(253,255);
+smooth (0,26)(78,84)(199,174)(253,255); steep (0,26)(25,132)(192,135)(253,255);
+instant (0,255)(2,255)(192,255)(255,255); turbo (0,255)(1,255)(2,255)(3,255).
+Polling rate and controller type live in DeviceConfig (global); "Classic"
+mode needs its own WebHID permission in Wootility, so its button codes were
+not captured.
+
 ## Commands beyond 59
 
 61 GetRtKeys (per-key rapid trigger list), 62 GetProfileCount, 63
@@ -175,7 +190,6 @@ GetSwitchTable.
 
 ## Open items
 
-- The 0x12 report and the 0x1B blob contents.
-- Gamepad button mapping / analog curve writes (`GetGamepadMapping` 40,
-  `GetGamepadProfile` 41) — only the mode toggle is implemented.
+- The 0x1B blob contents.
+- "Classic" controller button codes (PID 0x1321).
 - Effect parameter semantics beyond what Wootility's presets write.

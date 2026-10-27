@@ -122,7 +122,7 @@ message AnalogValues {
 message KeyboardProfile {
   message Payload {
     optional uint32 actuation = 1;
-    optional uint32 f2 = 2;            // observed 1
+    optional uint32 keyboard_keys = 2; // gamepad: 1 = mapped keys still type ("Enable keyboard keys")
     optional uint32 rapid_trigger = 3; // 0/1
     optional uint32 rt_press = 4;      // sensitivity (press / "activate")
     optional uint32 tachyon = 5;       // 0/1
@@ -134,13 +134,31 @@ message KeyboardProfile {
   Payload payload = 1;
 }
 
-// AnalogCurve (0x13) report: calibration/curve points plus extras.
-message AnalogCurve {
+// GetGamepadProfile (41, p3 = slot) response / GamepadProfile (0x13) report:
+// the analog → joystick curve (4 points, x = key travel 0..=255 for
+// 0.10..4.00 mm, y = axis value 0..=255; the first point's y is the
+// anti-deadzone) and the joystick options (Wootility "Configuration" tab).
+message GamepadProfile {
   message Point { optional uint32 x = 1; optional uint32 y = 2; }
   message Curve { repeated Point points = 1; }
-  message Extra { optional uint32 a = 1; optional uint32 b = 2; optional uint32 c = 3; optional uint32 d = 4; }
+  message Settings {
+    optional uint32 angle_enabled = 1; // "Enable angle adjustment"
+    optional uint32 square = 2;        // "Use square joystick output"
+    optional uint32 snappy = 3;        // "Snappy joystick" (max of opposite keys instead of sum)
+    optional uint32 angle = 4;         // 0..=100, shown as angle * 0.9 degrees (50 = 45°)
+  }
   Curve curve = 1;
-  Extra extra = 2;
+  Settings settings = 2;
+}
+
+// GetGamepadMapping (40, p3 = slot) response / GamepadMapping (0x12) report:
+// which keys act as controller buttons. Each key is
+// `(button_code << 8) | matrix_id` (codes in `src/gamepad.rs`).
+message GamepadMapping {
+  message Keys { repeated uint32 key = 1 [packed = false]; }
+  message Layer { Keys keys = 2; }
+  Layer layer = 1;
+  optional uint32 override_keys = 2; // "Gamepad mapping override": mapped keys stop typing
 }
 
 // GetAkcProfile (52, p3 = slot) response / AdvancedKeys (0x18) report,

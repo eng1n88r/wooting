@@ -391,7 +391,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         ("rgb", Overlay::Lighting),
         ("remap", Overlay::Codes),
         ("advanced", Overlay::Badges),
-        ("gamepad", Overlay::Lighting),
+        ("gamepad", Overlay::Badges),
         ("settings", Overlay::Lighting),
     ]
     .into_iter()

@@ -32,6 +32,73 @@ struct Cli {
 }
 
 #[derive(Args)]
+struct GamepadArgs {
+    #[command(subcommand)]
+    cmd: Option<GamepadCmd>,
+}
+
+#[derive(Subcommand)]
+enum GamepadCmd {
+    /// Show the gamepad setup of a profile slot (default).
+    Show {
+        #[arg(long)]
+        slot: Option<u8>,
+    },
+    /// Map buttons onto keys: `woot gamepad map z=a x=ls_up space=-` (- removes).
+    Map {
+        #[arg(num_args = 1..)]
+        assignments: Vec<String>,
+        #[arg(long)]
+        slot: Option<u8>,
+    },
+    /// Remove every button mapping.
+    Clear {
+        #[arg(long)]
+        slot: Option<u8>,
+    },
+    /// Mapped keys stop typing ("Gamepad mapping override").
+    Override {
+        #[arg(value_parser = clap::builder::BoolishValueParser::new())]
+        on: bool,
+        #[arg(long)]
+        slot: Option<u8>,
+    },
+    /// Whether mapped keys still type ("Enable keyboard keys").
+    KeyboardKeys {
+        #[arg(value_parser = clap::builder::BoolishValueParser::new())]
+        on: bool,
+        #[arg(long)]
+        slot: Option<u8>,
+    },
+    /// Analog curve: a preset name, or --points "0,20 60,60 194,195 253,255", and/or --deadzone.
+    Curve {
+        preset: Option<String>,
+        #[arg(long)]
+        points: Option<String>,
+        /// Anti-deadzone 0..255 (axis value at the lightest press).
+        #[arg(long)]
+        deadzone: Option<u32>,
+        #[arg(long)]
+        slot: Option<u8>,
+    },
+    /// Joystick options: --angle on|off, --degrees 0..90, --square on|off, --snappy on|off.
+    Joystick {
+        #[arg(long, value_parser = clap::builder::BoolishValueParser::new())]
+        angle: Option<bool>,
+        #[arg(long)]
+        degrees: Option<f32>,
+        #[arg(long, value_parser = clap::builder::BoolishValueParser::new())]
+        square: Option<bool>,
+        #[arg(long, value_parser = clap::builder::BoolishValueParser::new())]
+        snappy: Option<bool>,
+        #[arg(long)]
+        slot: Option<u8>,
+    },
+    /// List button names and curve presets.
+    Buttons,
+}
+
+#[derive(Args)]
 struct LinksArgs {
     #[command(subcommand)]
     cmd: Option<LinksCmd>,
@@ -98,6 +165,12 @@ enum Cmd {
         /// Gamepad mode; restarts the keyboard with a different USB identity.
         #[arg(long)]
         gamepad: Option<bool>,
+        /// Gamepad USB polling rate: 250 or 1000 (restarts the keyboard).
+        #[arg(long)]
+        polling: Option<u32>,
+        /// Controller type: xbox or classic (restarts the keyboard with another USB identity).
+        #[arg(long)]
+        controller: Option<String>,
         /// Reset ALL keyboard settings to factory (needs --confirm).
         #[arg(long)]
         reset: bool,
@@ -106,6 +179,8 @@ enum Cmd {
     },
     /// Linked profiles: switch profile when a Hyprland window gets focus (needs wootd).
     Links(LinksArgs),
+    /// Gamepad: button mapping, analog curve, joystick options.
+    Gamepad(GamepadArgs),
     /// Call any API method with a JSON params object.
     Call {
         method: String,
@@ -806,18 +881,30 @@ fn main() -> Result<()> {
             debounce,
             compat,
             gamepad,
+            polling,
+            controller,
             reset,
             confirm,
         } => {
             if reset {
                 call("settings.reset", json!({"confirm": confirm}))?
-            } else if compat.is_some() || gamepad.is_some() {
+            } else if compat.is_some()
+                || gamepad.is_some()
+                || polling.is_some()
+                || controller.is_some()
+            {
                 let mut p = json!({});
                 if let Some(c) = compat {
                     p["compat_mode"] = c.into();
                 }
                 if let Some(g) = gamepad {
                     p["gamepad_mode"] = g.into();
+                }
+                if let Some(hz) = polling {
+                    p["polling_hz"] = hz.into();
+                }
+                if let Some(t) = controller {
+                    p["controller"] = t.into();
                 }
                 call("settings.device.set", p)?
             } else if dim.is_none()
@@ -829,6 +916,8 @@ fn main() -> Result<()> {
                 let d = call("settings.device.get", json!({}))?;
                 g["compat_mode"] = d["compat_mode"].clone();
                 g["gamepad_mode"] = d["gamepad_mode"].clone();
+                g["gamepad_polling_hz"] = d["polling_hz"].clone();
+                g["gamepad_controller"] = d["controller"].clone();
                 g
             } else {
                 let mut p = json!({});
@@ -846,6 +935,170 @@ fn main() -> Result<()> {
                 }
                 call("settings.global.set", p)?
             }
+        }
+        Cmd::Gamepad(GamepadArgs { cmd }) => {
+            let v = match cmd.unwrap_or(GamepadCmd::Show { slot: None }) {
+                GamepadCmd::Show { slot } => call("gamepad.get", json!({"slot": slot}))?,
+                GamepadCmd::Map { assignments, slot } => {
+                    let mut keys = serde_json::Map::new();
+                    for a in assignments {
+                        let (k, b) = a
+                            .split_once('=')
+                            .ok_or_else(|| anyhow::anyhow!("expected key=button, got {a:?}"))?;
+                        keys.insert(
+                            k.to_string(),
+                            if b == "-" || b.eq_ignore_ascii_case("none") {
+                                Value::Null
+                            } else {
+                                Value::String(b.to_string())
+                            },
+                        );
+                    }
+                    call("gamepad.set", json!({"keys": keys, "slot": slot}))?
+                }
+                GamepadCmd::Clear { slot } => {
+                    let cur = call("gamepad.get", json!({"slot": slot}))?;
+                    let keys: serde_json::Map<String, Value> = cur["keys"]
+                        .as_object()
+                        .map(|m| m.keys().map(|k| (k.clone(), Value::Null)).collect())
+                        .unwrap_or_default();
+                    call("gamepad.set", json!({"keys": keys, "slot": slot}))?
+                }
+                GamepadCmd::Override { on, slot } => {
+                    call("gamepad.set", json!({"override": on, "slot": slot}))?
+                }
+                GamepadCmd::KeyboardKeys { on, slot } => {
+                    call("gamepad.set", json!({"keyboard_keys": on, "slot": slot}))?
+                }
+                GamepadCmd::Curve {
+                    preset,
+                    points,
+                    deadzone,
+                    slot,
+                } => {
+                    let mut p = json!({"slot": slot});
+                    if let Some(n) = preset {
+                        p["preset"] = n.into();
+                    }
+                    if let Some(pts) = points {
+                        let parsed: Vec<Vec<u32>> = pts
+                            .split_whitespace()
+                            .map(|pair| {
+                                pair.split(',')
+                                    .map(|n| n.trim().parse::<u32>())
+                                    .collect::<Result<Vec<_>, _>>()
+                            })
+                            .collect::<Result<_, _>>()
+                            .context("points must be \"x,y x,y x,y x,y\"")?;
+                        p["points"] = json!(parsed);
+                    }
+                    if let Some(d) = deadzone {
+                        p["deadzone"] = d.into();
+                    }
+                    call("gamepad.curve.set", p)?
+                }
+                GamepadCmd::Joystick {
+                    angle,
+                    degrees,
+                    square,
+                    snappy,
+                    slot,
+                } => {
+                    let mut p = json!({"slot": slot});
+                    if let Some(a) = angle {
+                        p["angle_enabled"] = a.into();
+                    }
+                    if let Some(d) = degrees {
+                        p["angle"] = ((d / 0.9).round().clamp(0.0, 100.0) as u32).into();
+                    }
+                    if let Some(q) = square {
+                        p["square"] = q.into();
+                    }
+                    if let Some(n) = snappy {
+                        p["snappy"] = n.into();
+                    }
+                    call("gamepad.curve.set", p)?
+                }
+                GamepadCmd::Buttons => {
+                    let v = call("gamepad.buttons", json!({}))?;
+                    if !json {
+                        for b in v["buttons"].as_array().into_iter().flatten() {
+                            println!(
+                                "{:<10} {:<10} 0x{:02x}",
+                                b["name"].as_str().unwrap_or(""),
+                                b["label"].as_str().unwrap_or(""),
+                                b["code"].as_u64().unwrap_or(0)
+                            );
+                        }
+                        println!(
+                            "presets: {}",
+                            v["presets"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|p| p["name"].as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                        return Ok(());
+                    }
+                    v
+                }
+            };
+            if !json {
+                println!(
+                    "slot: {}   keyboard keys: {}   override: {}",
+                    v["slot"], v["keyboard_keys"], v["override"]
+                );
+                if let Some(d) = v["device"].as_object() {
+                    println!(
+                        "gamepad mode: {}   polling: {} Hz   controller: {}",
+                        d["gamepad_mode"],
+                        d["polling_hz"],
+                        d["controller"].as_str().unwrap_or("?")
+                    );
+                }
+                let mut keys: Vec<(String, String)> = v["keys"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(k, b)| (k.clone(), b.as_str().unwrap_or("?").to_string()))
+                    .collect();
+                keys.sort();
+                println!(
+                    "buttons: {}",
+                    if keys.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        keys.iter()
+                            .map(|(k, b)| format!("{k}={b}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    }
+                );
+                let pts: Vec<String> = v["curve"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|p| format!("{},{}", p[0], p[1]))
+                    .collect();
+                println!(
+                    "curve: {} {}   deadzone: {}",
+                    v["preset"].as_str().unwrap_or("custom"),
+                    pts.join(" "),
+                    v["deadzone"]
+                );
+                let deg = v["angle"].as_f64().unwrap_or(50.0) * 0.9;
+                println!(
+                    "angle: {} ({deg:.0}°)   square: {}   snappy: {}",
+                    v["angle_enabled"], v["square"], v["snappy"]
+                );
+                if let Some(d) = v.get("draft") {
+                    println!("draft: {d}");
+                }
+                return Ok(());
+            }
+            v
         }
         Cmd::Links(LinksArgs { cmd }) => {
             let v = match cmd.unwrap_or(LinksCmd::List) {

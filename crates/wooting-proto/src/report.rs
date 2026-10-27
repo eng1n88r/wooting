@@ -23,8 +23,8 @@ pub mod kind {
     pub const RGB_PROFILE_COLORS_PART1: u8 = 0x0E;
     pub const RGB_PROFILE_COLORS_PART2: u8 = 0x0F;
     pub const KEYBOARD_PROFILE: u8 = 0x11;
-    pub const UNKNOWN_12: u8 = 0x12;
-    pub const ANALOG_CURVE: u8 = 0x13;
+    pub const GAMEPAD_MAPPING: u8 = 0x12;
+    pub const GAMEPAD_PROFILE: u8 = 0x13;
     pub const MAPPING_PROFILE: u8 = 0x14;
     pub const PER_KEY: u8 = 0x15;
     pub const RGB_PROFILE_CORE: u8 = 0x16;

@@ -47,6 +47,18 @@ pub struct KeyboardSettings {
     pub tachyon: bool,
 }
 
+/// Decoded DeviceConfig flags.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeviceSettings {
+    pub compat_mode: bool,
+    pub gamepad_mode: bool,
+    /// Gamepad USB polling rate: 1000 or 250.
+    pub polling_hz: u32,
+    /// "xbox" or "classic".
+    pub controller: String,
+    pub raw: Vec<u8>,
+}
+
 impl KeyboardSettings {
     pub fn from_pb(p: &pb::KeyboardProfile) -> KeyboardSettings {
         let d = p.payload.unwrap_or_default();
@@ -65,7 +77,7 @@ impl KeyboardSettings {
     pub fn apply(&self, p: &mut pb::KeyboardProfile) {
         let d = p.payload.get_or_insert_with(Default::default);
         d.actuation = Some(mm_to_code(self.actuation_mm));
-        d.f2.get_or_insert(1);
+        d.keyboard_keys.get_or_insert(1);
         d.rapid_trigger = Some(self.rapid_trigger as u32);
         d.rt_press = Some(mm_to_code(self.rt_press_mm));
         d.tachyon = Some(self.tachyon as u32);
@@ -673,6 +685,55 @@ impl Keyboard {
             .get(6)
             .map(|b| b & 0x04 == 0)
             .unwrap_or(false))
+    }
+
+    /// Decoded DeviceConfig (byte 0 bit 4 = 6KRO; byte 6: bit 2 = gamepad
+    /// off, bit 3 = 1000 Hz gamepad polling (else 250 Hz), bit 1 = "Classic"
+    /// controller instead of Xbox).
+    pub fn device_settings(&self) -> Result<DeviceSettings> {
+        let cfg = self.device_config()?;
+        let b6 = cfg.get(6).copied().unwrap_or(0x0C);
+        Ok(DeviceSettings {
+            compat_mode: cfg.first().map(|b| b & 0x10 != 0).unwrap_or(false),
+            gamepad_mode: b6 & 0x04 == 0,
+            polling_hz: if b6 & 0x08 != 0 { 1000 } else { 250 },
+            controller: if b6 & 0x02 != 0 { "classic" } else { "xbox" }.to_string(),
+            raw: cfg,
+        })
+    }
+
+    /// Write every device flag at once (one restart). `None` keeps a value.
+    pub fn set_device_settings(
+        &self,
+        compat: Option<bool>,
+        gamepad: Option<bool>,
+        polling_hz: Option<u32>,
+        controller: Option<&str>,
+    ) -> Result<()> {
+        let mut cfg = self.device_config()?;
+        cfg.resize(7, 0);
+        let set = |b: &mut u8, mask: u8, on: bool| if on { *b |= mask } else { *b &= !mask };
+        if let Some(c) = compat {
+            set(&mut cfg[0], 0x10, c);
+        }
+        if let Some(g) = gamepad {
+            set(&mut cfg[6], 0x04, !g);
+        }
+        if let Some(hz) = polling_hz {
+            match hz {
+                1000 => set(&mut cfg[6], 0x08, true),
+                250 => set(&mut cfg[6], 0x08, false),
+                _ => return Err(Error::Other("polling rate must be 250 or 1000".into())),
+            }
+        }
+        if let Some(t) = controller {
+            match t.to_ascii_lowercase().as_str() {
+                "xbox" => set(&mut cfg[6], 0x02, false),
+                "classic" => set(&mut cfg[6], 0x02, true),
+                _ => return Err(Error::Other("controller must be xbox or classic".into())),
+            }
+        }
+        self.write_device_config(cfg)
     }
 
     /// Write DeviceConfig and soft-reset the keyboard (it re-enumerates;

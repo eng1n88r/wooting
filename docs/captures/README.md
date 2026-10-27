@@ -162,3 +162,40 @@ colour rows (0x0E/0x0F) only.
 ## 0x1B blobs
 Four 510-byte chunks, flags `chunk<<5 | slot-ish`; carry RGB565-looking data
 for extra RGB layers. Kept opaque.
+
+# Session 3 (2026-10-27, fw 2.14.2, gamepad mode on) — Gamepad page
+
+Keyboard enumerated as 31e3:1320 (Xbox gamepad composite). Every change is
+RAM-only (flags 0) until "Save to Keyboard"; reads come back from flash.
+
+## Setup & Remap
+- "Enable keyboard keys" off/on: `1d` then `11` (KeyboardProfile) with field
+  2 = 0 / 1 (`0a 14 08 99 b3 01 10 00 …` / `… 10 01 …`).
+- Polling 250 Hz: DeviceConfig `07 | 10 00 00 00 00 00 00` + SoftReset; back to
+  1000 Hz: `… 00 08`. After reconnect `GetDeviceConfig` = `10 00 00 00 11 00 08`.
+- Controller type Classic: `… 00 0a` → keyboard re-enumerates as 31e3:**1321**
+  (Wootility lost the device: no WebHID permission). Restored with
+  `woot --direct raw report "01 d1 da 07 10 00 00 00 00 00 08"` + SoftReset.
+- Drop button A on Z: `output1 d1 da 12 00 0a 00 | 0a 06 12 04 08 82 f1 01 10 00`
+  = GamepadMapping { layer{ keys{ key = 0x7882 } }, override = 0 }
+  (0x78 = A, 0x82 = matrix row 4 col 2). 21 buttons dropped → one 0x12 report
+  with all entries (`0a 56 12 54 08 … 10 00`); right-click removes the entry
+  and resends the list; "Gamepad mapping override" toggles the trailing
+  `10 00` / `10 01`.
+- Button ↔ code table recovered from the keycap tooltips: see
+  `docs/protocol.md` ("Gamepad").
+
+## Configuration
+GamepadProfile report `output2 d1 da 13 00 28 00 | 0a 1c {4 points} 12 08 08 A 10 S 18 N 20 D`:
+- angle adjustment on/off → A = 1/0; slider → D (50 = 45°, 86 = 77°);
+- square joystick → S; snappy joystick → N (default 1);
+- presets replace the 4 points (values in `protocol.md`); dragging the first
+  point changes only its y ("anti-deadzone", 20 → 80 observed).
+- `GetGamepadProfile(41)` with no params returns the same bytes as the active
+  profile's flash copy; p3 = slot reads other slots.
+
+## Verified writes from this project
+`gamepad.set` / `gamepad.curve.set` with `persist` on a temporary slot 3,
+read back with `GetGamepadMapping(40, p3=3)` =
+`0a 0a 12 08 0a 06 83 a1 02 82 f1 01 10 01` (firmware packs the list) and
+`GetGamepadProfile(41, p3=3)` = the aggro preset with angle on / 86.
