@@ -83,6 +83,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     let stack = adw::ViewStack::new();
     stack.add_titled_with_icon(&lighting_page(&ctx), Some("lighting"), "Lighting", "weather-clear-symbolic");
     stack.add_titled_with_icon(&keymap_page(&ctx), Some("keymap"), "Keymap", "input-keyboard-symbolic");
+    stack.add_titled_with_icon(&actuation_page(&ctx), Some("actuation"), "Actuation", "object-flip-vertical-symbolic");
     stack.add_titled_with_icon(&settings_page(&ctx), Some("settings"), "Settings", "preferences-system-symbolic");
     stack.add_titled_with_icon(&device_page(&ctx), Some("device"), "Device", "drive-harddisk-symbolic");
 
@@ -115,6 +116,11 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         .default_height(720)
         .content(&toolbar)
         .build();
+
+    // `WOOTING_GTK_PAGE=keymap` opens on that page (handy for screenshots).
+    if let Ok(page) = std::env::var("WOOTING_GTK_PAGE") {
+        stack.set_visible_child_name(&page);
+    }
 
     // Toggle code display with the page.
     let c = ctx.clone();
@@ -332,53 +338,247 @@ fn keymap_page(ctx: &Ctx) -> gtk::Widget {
     let page = page_box();
     let group = adw::PreferencesGroup::builder()
         .title("Key map")
-        .description("Shows the raw Wooting key code the active profile assigns to each key (255 = none). Remapping lands once the write protocol is captured.")
+        .description("Select keys on the keyboard, pick what they should send, then Apply (live) or Save (also written to the active profile's flash). 'none' disables a key.")
         .build();
-    let reload = gtk::Button::with_label("Reload");
-    reload.set_valign(gtk::Align::Center);
-    let row = adw::ActionRow::builder().title("Active profile mapping").build();
-    row.add_suffix(&reload);
-    group.add(&row);
+
+    let layer = gtk::DropDown::from_strings(&["Main layer", "Fn layer 1", "Fn layer 2"]);
+    layer.set_valign(gtk::Align::Center);
+    let layer_row = adw::ActionRow::builder().title("Layer").build();
+    layer_row.add_suffix(&layer);
+    group.add(&layer_row);
+
+    let names: Vec<&str> = wooting_proto::keycode::KEYCODES.iter().map(|(_, n)| *n).collect();
+    let code = gtk::DropDown::from_strings(&names);
+    code.set_enable_search(true);
+    code.set_valign(gtk::Align::Center);
+    let apply = gtk::Button::with_label("Apply");
+    apply.set_valign(gtk::Align::Center);
+    let save = gtk::Button::with_label("Apply & Save");
+    save.add_css_class("suggested-action");
+    save.set_valign(gtk::Align::Center);
+    let code_row = adw::ActionRow::builder().title("Selected keys send").build();
+    code_row.add_suffix(&code);
+    code_row.add_suffix(&apply);
+    code_row.add_suffix(&save);
+    group.add(&code_row);
+
+    let reset = gtk::Button::with_label("Reset layer");
+    reset.set_valign(gtk::Align::Center);
+    let reset_row = adw::ActionRow::builder().title("Factory mapping").subtitle("Restores this layer's default mapping and saves it").build();
+    reset_row.add_suffix(&reset);
+    group.add(&reset_row);
     page.append(&group);
+
     let c = ctx.clone();
-    let load = move || {
+    let l = layer.clone();
+    let load: Rc<dyn Fn()> = Rc::new(move || {
         let c = c.clone();
+        let layer = l.selected() as u8;
         spawn(async move {
-            let Some(v) = c.call("keymap.get", json!({})).await else { return };
+            let Some(v) = c.call("keymap.get", json!({"layer": layer})).await else { return };
             let mut st = c.view.state.borrow_mut();
             st.codes.clear();
-            if let Some(layout) = st.layout.clone() {
-                for key in &layout.keys {
-                    let cell = key.cells[0];
-                    let code = v["rows"][cell[0] as usize][cell[1] as usize].as_u64().unwrap_or(255) as u8;
-                    st.codes.insert(key.id.clone(), code);
+            if let Some(keys) = v["keys"].as_object() {
+                for (id, k) in keys {
+                    st.codes.insert(id.clone(), k["name"].as_str().unwrap_or("?").to_string());
                 }
             }
             drop(st);
             c.view.area.queue_draw();
         });
-    };
+    });
     let l = load.clone();
-    reload.connect_clicked(move |_| l());
+    layer.connect_selected_notify(move |_| l());
+
+    let names: Rc<Vec<String>> = Rc::new(names.iter().map(|n| n.to_string()).collect());
+    let make_apply = |persist: bool| {
+        let c = ctx.clone();
+        let layer = layer.clone();
+        let code = code.clone();
+        let load = load.clone();
+        let names = names.clone();
+        move |_: &gtk::Button| {
+            let keys = c.view.selected();
+            if keys.is_empty() {
+                c.toast("Select some keys first");
+                return;
+            }
+            let name = names[code.selected() as usize].to_string();
+            let map: serde_json::Map<String, Value> = keys.into_iter().map(|k| (k, Value::String(name.clone()))).collect();
+            let c = c.clone();
+            let load = load.clone();
+            let layer = layer.selected() as u8;
+            spawn(async move {
+                if c.call("keymap.set", json!({"keys": map, "layer": layer, "persist": persist})).await.is_some() {
+                    c.toast(if persist { "Mapping saved to keyboard" } else { "Mapping applied (not saved)" });
+                }
+                load();
+            });
+        }
+    };
+    apply.connect_clicked(make_apply(false));
+    save.connect_clicked(make_apply(true));
+    let c = ctx.clone();
+    let l = layer.clone();
+    let ld = load.clone();
+    reset.connect_clicked(move |_| {
+        let c = c.clone();
+        let ld = ld.clone();
+        let layer = l.selected() as u8;
+        spawn(async move {
+            if c.call("keymap.reset", json!({"layer": layer, "persist": true})).await.is_some() {
+                c.toast("Layer reset to factory mapping");
+            }
+            ld();
+        });
+    });
+    load();
+    page.upcast()
+}
+
+fn actuation_page(ctx: &Ctx) -> gtk::Widget {
+    let page = page_box();
+    let group = adw::PreferencesGroup::builder()
+        .title("Actuation &amp; rapid trigger")
+        .description("Applies to every key of the active profile. Apply is live; Save also writes the profile's flash.")
+        .build();
+
+    let scale = |min: f64, max: f64| {
+        let s = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, 0.05);
+        s.set_hexpand(true);
+        s.set_draw_value(true);
+        s.set_digits(2);
+        s.set_value_pos(gtk::PositionType::Right);
+        s.set_size_request(320, -1);
+        s
+    };
+    let actuation = scale(0.1, 4.0);
+    let r1 = adw::ActionRow::builder().title("Actuation point").subtitle("mm of travel before a key registers").build();
+    r1.add_suffix(&actuation);
+    group.add(&r1);
+
+    let rt = gtk::Switch::new();
+    rt.set_valign(gtk::Align::Center);
+    let r2 = adw::ActionRow::builder().title("Rapid trigger").subtitle("Re-arm a key as soon as it moves back up").build();
+    r2.add_suffix(&rt);
+    group.add(&r2);
+
+    let press = scale(0.1, 4.0);
+    let r3 = adw::ActionRow::builder().title("Sensitivity (press)").build();
+    r3.add_suffix(&press);
+    group.add(&r3);
+
+    let split = gtk::Switch::new();
+    split.set_valign(gtk::Align::Center);
+    let r4 = adw::ActionRow::builder().title("Split sensitivity").subtitle("Separate release sensitivity").build();
+    r4.add_suffix(&split);
+    group.add(&r4);
+
+    let release = scale(0.1, 4.0);
+    let r5 = adw::ActionRow::builder().title("Sensitivity (release)").build();
+    r5.add_suffix(&release);
+    group.add(&r5);
+
+    let tachyon = gtk::Switch::new();
+    tachyon.set_valign(gtk::Align::Center);
+    let r6 = adw::ActionRow::builder().title("Tachyon mode").subtitle("Fastest scanning; limits brightness and disables RGB effects").build();
+    r6.add_suffix(&tachyon);
+    group.add(&r6);
+
+    let apply = gtk::Button::with_label("Apply");
+    apply.set_valign(gtk::Align::Center);
+    let save = gtk::Button::with_label("Apply & Save");
+    save.add_css_class("suggested-action");
+    save.set_valign(gtk::Align::Center);
+    let r7 = adw::ActionRow::builder().title("Write to keyboard").build();
+    r7.add_suffix(&apply);
+    r7.add_suffix(&save);
+    group.add(&r7);
+    page.append(&group);
+
+    let widgets = (actuation.clone(), rt.clone(), press.clone(), split.clone(), release.clone(), tachyon.clone());
+    let c = ctx.clone();
+    let w = widgets.clone();
+    let load: Rc<dyn Fn()> = Rc::new(move || {
+        let c = c.clone();
+        let w = w.clone();
+        spawn(async move {
+            let Some(v) = c.call("settings.get", json!({})).await else { return };
+            w.0.set_value(v["actuation_mm"].as_f64().unwrap_or(1.6));
+            w.1.set_active(v["rapid_trigger"].as_bool().unwrap_or(false));
+            w.2.set_value(v["rt_press_mm"].as_f64().unwrap_or(0.4));
+            let rel = v["rt_release_mm"].as_f64();
+            w.3.set_active(rel.is_some());
+            w.4.set_value(rel.unwrap_or(v["rt_press_mm"].as_f64().unwrap_or(0.4)));
+            w.4.set_sensitive(rel.is_some());
+            w.5.set_active(v["tachyon"].as_bool().unwrap_or(false));
+        });
+    });
+    let rel = release.clone();
+    split.connect_active_notify(move |s| rel.set_sensitive(s.is_active()));
+    let make_apply = |persist: bool| {
+        let c = ctx.clone();
+        let w = widgets.clone();
+        let load = load.clone();
+        move |_: &gtk::Button| {
+            let params = json!({
+                "actuation_mm": w.0.value(),
+                "rapid_trigger": w.1.is_active(),
+                "rt_press_mm": w.2.value(),
+                "rt_release_mm": if w.3.is_active() { Value::from(w.4.value()) } else { Value::Null },
+                "tachyon": w.5.is_active(),
+                "persist": persist,
+            });
+            let c = c.clone();
+            let load = load.clone();
+            spawn(async move {
+                if c.call("settings.set", params).await.is_some() {
+                    c.toast(if persist { "Settings saved to keyboard" } else { "Settings applied (not saved)" });
+                }
+                load();
+            });
+        }
+    };
+    apply.connect_clicked(make_apply(false));
+    save.connect_clicked(make_apply(true));
     load();
     page.upcast()
 }
 
 fn settings_page(ctx: &Ctx) -> gtk::Widget {
     let page = page_box();
-    let group = adw::PreferencesGroup::builder().title("Global settings").description("Read from the keyboard. Editing arrives with the Phase 2 protocol capture.").build();
-    let dim = adw::ActionRow::builder().title("Dim lighting after").build();
-    let off = adw::ActionRow::builder().title("Turn lighting off after").build();
+    let group = adw::PreferencesGroup::builder().title("Lighting power saving").description("Device-wide. 0 = never.").build();
+    let dim = adw::SpinRow::with_range(0.0, 240.0, 1.0);
+    dim.set_title("Dim lighting after (minutes)");
+    let off = adw::SpinRow::with_range(0.0, 240.0, 1.0);
+    off.set_title("Turn lighting off after (minutes)");
     group.add(&dim);
     group.add(&off);
+    let apply = gtk::Button::with_label("Save");
+    apply.add_css_class("suggested-action");
+    apply.set_valign(gtk::Align::Center);
+    let r = adw::ActionRow::builder().title("Write to keyboard").build();
+    r.add_suffix(&apply);
+    group.add(&r);
     page.append(&group);
     let c = ctx.clone();
+    let (d, o) = (dim.clone(), off.clone());
     spawn(async move {
         if let Some(v) = c.call("settings.global.get", json!({})).await {
             let ps = &v["power_saving"];
-            dim.set_subtitle(&format!("{} min", ps["dim_after_minutes"]));
-            off.set_subtitle(&format!("{} min", ps["off_after_minutes"]));
+            d.set_value(ps["dim_after_minutes"].as_f64().unwrap_or(0.0));
+            o.set_value(ps["off_after_minutes"].as_f64().unwrap_or(0.0));
         }
+    });
+    let c = ctx.clone();
+    apply.connect_clicked(move |_| {
+        let c = c.clone();
+        let params = json!({"dim_after_minutes": dim.value() as u64, "off_after_minutes": off.value() as u64});
+        spawn(async move {
+            if c.call("settings.global.set", params).await.is_some() {
+                c.toast("Power saving saved");
+            }
+        });
     });
     page.upcast()
 }
@@ -401,6 +601,26 @@ fn device_page(ctx: &Ctx) -> gtk::Widget {
     listbox.set_selection_mode(gtk::SelectionMode::None);
     profiles.add(&listbox);
     page.append(&profiles);
+
+    let rename = adw::EntryRow::builder().title("Rename active profile").show_apply_button(true).build();
+    profiles.add(&rename);
+    let c = ctx.clone();
+    rename.connect_apply(move |e| {
+        let name = e.text().to_string();
+        if name.trim().is_empty() {
+            return;
+        }
+        let c = c.clone();
+        spawn(async move {
+            if let Some(v) = c.call("device.info", json!({})).await {
+                let slot = v["active_profile"].as_u64().unwrap_or(0);
+                if c.call("profile.rename", json!({"slot": slot, "name": name})).await.is_some() {
+                    c.toast("Profile renamed");
+                }
+            }
+            c.refresh_status().await;
+        });
+    });
 
     let tools = adw::PreferencesGroup::builder().title("Tools").build();
     let backup = gtk::Button::with_label("Create backup");

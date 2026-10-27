@@ -1,6 +1,9 @@
 // Protobuf messages carried in Wooting output/input reports.
-// Field numbers were recovered from dumps of a 60HE+ (firmware 2.14.1);
-// names are ours. See docs/protocol.md.
+// Scalars the firmware writes are declared `optional` so that zero values
+// are still encoded: the firmware emits every field and appears to expect
+// them back.
+// Field numbers were recovered from dumps of a 60HE+ (firmware 2.14.1) and
+// captures of Wootility v5.4; names are ours. See docs/protocol.md.
 syntax = "proto3";
 package wooting;
 
@@ -15,35 +18,39 @@ message RgbRows {
 // GetRgbProfileCore (50) response / RgbProfileCore (0x16) output report.
 message RgbProfileCore {
   message Payload {
-    uint32 brightness = 1; // 0..=255
-    uint32 a = 2;          // observed 0xFFFF
-    uint32 b = 3;          // observed 0xFFFF
-    uint32 c = 4;
-    uint32 d = 5;
+    optional uint32 brightness = 1; // 0..=255
+    optional uint32 a = 2;          // observed 0xFFFF
+    optional uint32 b = 3;          // observed 0xFFFF
+    optional uint32 c = 4;
+    optional uint32 d = 5;
   }
   Payload payload = 1;
-  bytes extra = 4; // observed empty
+  // Effect layers: layers{ layer{ effect{ kind, speed, direction … } } }.
+  // Kept opaque; written back verbatim.
+  bytes effects = 4;
 }
 
-// GetGlobalSettings (51) response / GlobalSettings (0x17) output report.
+// GetGlobalSettings (51) response / GlobalSettings (0x17, flags 1) report.
 message GlobalSettings {
   message PowerSaving {
-    uint32 dim_after_minutes = 1;
-    uint32 off_after_minutes = 2;
+    optional uint32 dim_after_minutes = 1;
+    optional uint32 off_after_minutes = 2;
   }
   PowerSaving power_saving = 1;
-  uint32 flags = 2; // observed 0
+  optional uint32 flags = 2; // observed 0
 }
 
-// GetProfileMetadata (55) response (param p3 = slot).
+// GetProfileMetadata (55, p3 = slot) response / ProfileMetadata (0x1A) report.
 message ProfileMetadata {
-  message Color { uint32 r = 1; uint32 g = 2; uint32 b = 3; }
+  message Color { optional uint32 r = 1; optional uint32 g = 2; optional uint32 b = 3; }
   string name = 1;
   Color color = 2;
   string icon = 3; // e.g. "woot:p:black"
 }
 
-// GetMappingProfile (48) response: six rows of 21 key codes, 0xFF = none.
+// GetMappingProfile (48, p3 = slot, p1 = layer) response / MappingProfile
+// (0x14) report: six rows of 21 Wooting key codes, 0xFF = none. An empty
+// message means "default mapping".
 message MappingProfile {
   message Row { bytes codes = 1; }
   repeated Row rows = 1;
@@ -55,17 +62,42 @@ message AnalogValues {
   repeated Row rows = 1;
 }
 
-// GetKeyboardProfile (39) response. Meaning of fields not yet known.
+// GetKeyboardProfile (39) response / KeyboardProfile (0x11) report.
+// Distances are 0x4000 | round(mm / 4.0 * 16383).
 message KeyboardProfile {
   message Payload {
-    uint32 f1 = 1;
-    uint32 f2 = 2;
-    uint32 f3 = 3;
-    uint32 f4 = 4;
-    uint32 f5 = 5;
-    uint32 f6 = 6;
-    uint32 f7 = 7;
-    uint32 f9 = 9;
+    optional uint32 actuation = 1;
+    optional uint32 f2 = 2;            // observed 1
+    optional uint32 rapid_trigger = 3; // 0/1
+    optional uint32 rt_press = 4;      // sensitivity (press / "activate")
+    optional uint32 tachyon = 5;       // 0/1
+    optional uint32 f6 = 6;            // observed 2
+    optional uint32 f7 = 7;            // observed 1
+    optional uint32 rt_release = 8;    // only when split sensitivity is on
+    optional uint32 f9 = 9;            // 1 while tachyon is on
   }
   Payload payload = 1;
+}
+
+// AnalogCurve (0x13) report: calibration/curve points plus extras.
+message AnalogCurve {
+  message Point { optional uint32 x = 1; optional uint32 y = 2; }
+  message Curve { repeated Point points = 1; }
+  message Extra { optional uint32 a = 1; optional uint32 b = 2; optional uint32 c = 3; optional uint32 d = 4; }
+  Curve curve = 1;
+  Extra extra = 2;
+}
+
+// GetAkcProfile (52) response / AdvancedKeys (0x18) report. Only mod-tap
+// entries have been observed so far.
+message AdvancedKeys {
+  message ModTap { optional uint32 tap = 1; optional uint32 hold = 2; }
+  message Entry {
+    ModTap mod_tap = 2;
+    optional uint32 f8 = 8; // observed 96..173
+    optional uint32 f9 = 9; // observed 0
+  }
+  repeated Entry entries = 1;
+  optional uint32 f2 = 2;
+  optional uint32 count = 3;
 }

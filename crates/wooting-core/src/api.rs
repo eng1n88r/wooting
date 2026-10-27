@@ -10,7 +10,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{path::PathBuf, sync::Mutex};
-use wooting_proto::{Command, Frame, Rgb, COLS, ROWS};
+use wooting_proto::{keycode, Command, Frame, Rgb, COLS, ROWS};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
@@ -87,8 +87,18 @@ pub fn methods() -> Vec<MethodInfo> {
         MethodInfo { name: "rgb.profile.get", description: "Colours stored in an RGB profile slot (default: active profile).", params: obj(json!({"slot": {"type": "integer", "minimum": 0, "description": "RGB profile slot; default = active profile"}}), &[]) },
         MethodInfo { name: "rgb.save", description: "Persist the current direct-mode frame into an RGB profile slot (default: active profile) so it survives unplugging. Writes flash.", params: obj(json!({"slot": {"type": "integer", "minimum": 0, "description": "RGB profile slot; default = active profile"}}), &[]) },
         MethodInfo { name: "theme.apply", description: "Colour the keyboard from an Omarchy theme directory (default: the current theme). persist=true also saves it to the keyboard.", params: obj(json!({"dir": {"type": "string"}, "persist": {"type": "boolean"}}), &[]) },
+        MethodInfo { name: "settings.get", description: "Actuation point, rapid trigger and Tachyon settings stored in a profile slot (default: active).", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
+        MethodInfo { name: "settings.set", description: "Change actuation (mm, 0.1-4.0), rapid trigger (on/off, press/release sensitivity in mm) and Tachyon for all keys. Applies live; persist=true also writes the active profile to flash.", params: obj(json!({"actuation_mm": {"type": "number"}, "rapid_trigger": {"type": "boolean"}, "rt_press_mm": {"type": "number"}, "rt_release_mm": {"type": ["number", "null"], "description": "null = same as press"}, "tachyon": {"type": "boolean"}, "persist": {"type": "boolean"}}), &[]) },
         MethodInfo { name: "settings.global.get", description: "Global settings (RGB power saving timers).", params: obj(json!({}), &[]) },
-        MethodInfo { name: "keymap.get", description: "Raw key mapping matrix of the active profile (Wooting key codes, 255 = none).", params: obj(json!({}), &[]) },
+        MethodInfo { name: "settings.global.set", description: "Set RGB power saving: minutes until the lighting dims and until it turns off (0 = never).", params: obj(json!({"dim_after_minutes": {"type": "integer"}, "off_after_minutes": {"type": "integer"}}), &[]) },
+        MethodInfo { name: "keymap.get", description: "Key mapping of a layer (0 = main, 1/2 = Fn layers) as {key_id: code_name} plus the raw matrix. slot defaults to the active profile.", params: obj(json!({"layer": {"type": "integer", "minimum": 0, "maximum": 3}, "slot": {"type": "integer"}}), &[]) },
+        MethodInfo { name: "keymap.set_key", description: "Remap one key: code is a key name from keycodes.list (e.g. \"esc\", \"f5\", \"lctrl\", \"none\"). Applies live to the active profile; persist=true also writes flash.", params: obj(json!({"key": {"type": "string"}, "code": {"type": "string"}, "layer": {"type": "integer", "minimum": 0, "maximum": 3}, "persist": {"type": "boolean"}}), &["key", "code"]) },
+        MethodInfo { name: "keymap.set", description: "Remap several keys at once: {\"keys\": {\"capslock\": \"esc\", \"esc\": \"grave\"}}.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": "string"}}, "layer": {"type": "integer"}, "persist": {"type": "boolean"}}), &["keys"]) },
+        MethodInfo { name: "keymap.reset", description: "Restore the factory mapping of a layer.", params: obj(json!({"layer": {"type": "integer"}, "persist": {"type": "boolean"}}), &[]) },
+        MethodInfo { name: "keycodes.list", description: "All key code names accepted by keymap.set_key.", params: obj(json!({}), &[]) },
+        MethodInfo { name: "advanced_keys.get", description: "Mod-tap and other advanced key entries of the active profile (raw).", params: obj(json!({}), &[]) },
+        MethodInfo { name: "profile.rename", description: "Rename a profile slot and/or set its badge colour.", params: obj(json!({"slot": {"type": "integer"}, "name": {"type": "string"}, "color": color}), &["slot"]) },
+        MethodInfo { name: "profile.delete", description: "Delete an onboard profile slot. Irreversible; needs confirm=true.", params: obj(json!({"slot": {"type": "integer"}, "confirm": {"type": "boolean"}}), &["slot"]) },
         MethodInfo { name: "backup.create", description: "Dump every readable profile/setting to a JSON file and return its path.", params: obj(json!({}), &[]) },
         MethodInfo { name: "raw.command", description: "Send a raw feature command by name or id with up to 4 byte params. Dangerous commands need confirm=true.", params: obj(json!({"command": {"type": "string"}, "params": {"type": "array", "items": {"type": "integer"}, "maxItems": 4}, "confirm": {"type": "boolean"}}), &["command"]) },
     ]
@@ -257,11 +267,123 @@ impl Api {
                     Ok(json!({"ok": true, "theme_dir": dir, "colors": colors, "persisted": persist}))
                 }).map_err(Into::into)
             }
+            "settings.get" => {
+                let slot = p.opt_u8("slot")?;
+                self.with_keyboard(|kb| {
+                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
+                    let mut v = serde_json::to_value(kb.settings(slot)?).unwrap();
+                    v["slot"] = slot.into();
+                    Ok(v)
+                }).map_err(Into::into)
+            }
+            "settings.set" => {
+                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
+                let patch = p.0.clone();
+                self.with_keyboard(|kb| {
+                    let active = kb.active_profile()?;
+                    let mut s = kb.settings(active)?;
+                    if let Some(v) = patch.get("actuation_mm").and_then(Value::as_f64) { s.actuation_mm = v as f32; }
+                    if let Some(v) = patch.get("rapid_trigger").and_then(Value::as_bool) { s.rapid_trigger = v; }
+                    if let Some(v) = patch.get("rt_press_mm").and_then(Value::as_f64) { s.rt_press_mm = v as f32; }
+                    match patch.get("rt_release_mm") {
+                        Some(Value::Null) => s.rt_release_mm = None,
+                        Some(v) => if let Some(f) = v.as_f64() { s.rt_release_mm = Some(f as f32) },
+                        None => {}
+                    }
+                    if let Some(v) = patch.get("tachyon").and_then(Value::as_bool) { s.tachyon = v; }
+                    kb.set_settings(&s, persist.then_some(active))?;
+                    let mut out = serde_json::to_value(if persist { kb.settings(active)? } else { s }).unwrap();
+                    out["persisted"] = persist.into();
+                    out["slot"] = active.into();
+                    Ok(out)
+                }).map_err(Into::into)
+            }
             "settings.global.get" => self.with_keyboard(|kb| Ok(serde_json::to_value(kb.global_settings()?).unwrap())).map_err(Into::into),
-            "keymap.get" => self.with_keyboard(|kb| {
-                let m = kb.mapping()?;
-                Ok(json!({"rows": m.rows.iter().map(|r| r.codes.clone()).collect::<Vec<_>>()}))
-            }).map_err(Into::into),
+            "settings.global.set" => {
+                let patch = p.0.clone();
+                self.with_keyboard(|kb| {
+                    let mut g = kb.global_settings()?;
+                    let ps = g.power_saving.get_or_insert_with(Default::default);
+                    if let Some(v) = patch.get("dim_after_minutes").and_then(Value::as_u64) { ps.dim_after_minutes = Some(v as u32); }
+                    if let Some(v) = patch.get("off_after_minutes").and_then(Value::as_u64) { ps.off_after_minutes = Some(v as u32); }
+                    ps.dim_after_minutes.get_or_insert(0);
+                    ps.off_after_minutes.get_or_insert(0);
+                    g.flags.get_or_insert(0);
+                    kb.set_global_settings(&g)?;
+                    Ok(serde_json::to_value(kb.global_settings()?).unwrap())
+                }).map_err(Into::into)
+            }
+            "keymap.get" => {
+                let layer = p.opt_u8("layer")?.unwrap_or(0);
+                let slot = p.opt_u8("slot")?;
+                self.with_keyboard(|kb| {
+                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
+                    let stored = kb.mapping(slot, layer)?;
+                    let rows = stored.unwrap_or_else(|| kb.layout().default_mapping(layer));
+                    Ok(mapping_json(kb, slot, layer, &rows, stored.is_some()))
+                }).map_err(Into::into)
+            }
+            "keymap.set_key" => {
+                let key = p.string("key")?;
+                let code = p.keycode("code")?;
+                let layer = p.opt_u8("layer")?.unwrap_or(0);
+                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
+                self.with_keyboard(|kb| {
+                    let slot = kb.active_profile()?;
+                    let rows = kb.set_key_mapping(layer, &key, code, persist.then_some(slot))?;
+                    Ok(mapping_json(kb, slot, layer, &rows, true))
+                }).map_err(Into::into)
+            }
+            "keymap.set" => {
+                let map = p.0.get("keys").and_then(Value::as_object).ok_or_else(|| ApiError::invalid("keys must be an object"))?;
+                let layer = p.opt_u8("layer")?.unwrap_or(0);
+                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
+                let mut pairs = Vec::new();
+                for (k, v) in map {
+                    let s = v.as_str().ok_or_else(|| ApiError::invalid(format!("code for {k} must be a string")))?;
+                    pairs.push((k.clone(), keycode::parse(s).ok_or_else(|| ApiError::invalid(format!("unknown key code {s:?}")))?));
+                }
+                self.with_keyboard(|kb| {
+                    let slot = kb.active_profile()?;
+                    let mut rows = kb.mapping_or_default(slot, layer)?;
+                    for (id, code) in &pairs {
+                        let key = kb.layout().key(id).ok_or_else(|| Error::UnknownKey(id.clone()))?;
+                        for c in &key.cells {
+                            rows[c[0] as usize][c[1] as usize] = *code;
+                        }
+                    }
+                    kb.set_mapping(layer, &rows, persist.then_some(slot))?;
+                    Ok(mapping_json(kb, slot, layer, &rows, true))
+                }).map_err(Into::into)
+            }
+            "keymap.reset" => {
+                let layer = p.opt_u8("layer")?.unwrap_or(0);
+                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
+                self.with_keyboard(|kb| {
+                    let slot = kb.active_profile()?;
+                    let rows = kb.layout().default_mapping(layer);
+                    kb.set_mapping(layer, &rows, persist.then_some(slot))?;
+                    Ok(mapping_json(kb, slot, layer, &rows, true))
+                }).map_err(Into::into)
+            }
+            "keycodes.list" => Ok(json!({"codes": keycode::KEYCODES.iter().map(|(c, n)| json!({"code": c, "name": n})).collect::<Vec<_>>()})),
+            "advanced_keys.get" => self.with_keyboard(|kb| Ok(serde_json::to_value(kb.advanced_keys()?).unwrap())).map_err(Into::into),
+            "profile.rename" => {
+                let slot = p.u8("slot")?;
+                let name = p.opt_string("name");
+                let color = match p.opt_string("color") {
+                    Some(c) => Some(Rgb::parse_hex(&c).ok_or_else(|| ApiError::invalid("bad colour"))?),
+                    None => None,
+                };
+                self.with_keyboard(|kb| Ok(serde_json::to_value(kb.set_profile_metadata(slot, name.as_deref(), color)?).unwrap())).map_err(Into::into)
+            }
+            "profile.delete" => {
+                let slot = p.u8("slot")?;
+                if !p.0.get("confirm").and_then(Value::as_bool).unwrap_or(false) {
+                    return Err(ApiError::invalid("deleting a profile is irreversible; pass confirm=true"));
+                }
+                self.with_keyboard(|kb| { kb.delete_profile(slot)?; Ok(json!({"deleted": slot})) }).map_err(Into::into)
+            }
             "backup.create" => self.with_keyboard(|kb| Ok(json!({"path": backup::save(kb)?}))).map_err(Into::into),
             "raw.command" => {
                 let name = p.string("command")?;
@@ -288,6 +410,15 @@ impl Api {
             other => Err(ApiError::method_not_found(other)),
         }
     }
+}
+
+fn mapping_json(kb: &Keyboard, slot: u8, layer: u8, rows: &[[u8; COLS]; ROWS], stored: bool) -> Value {
+    let keys: serde_json::Map<String, Value> = kb
+        .mapping_by_key(rows)
+        .into_iter()
+        .map(|(id, code, name)| (id, json!({"code": code, "name": name})))
+        .collect();
+    json!({"slot": slot, "layer": layer, "stored": stored, "keys": keys, "rows": rows.iter().map(|r| r.to_vec()).collect::<Vec<_>>()})
 }
 
 fn frame_json(f: &Frame) -> Value {
@@ -319,6 +450,10 @@ impl Params {
     fn u8(&self, k: &str) -> std::result::Result<u8, ApiError> {
         self.0.get(k).and_then(Value::as_u64).filter(|v| *v < 256).map(|v| v as u8)
             .ok_or_else(|| ApiError::invalid(format!("param {k:?} must be an integer 0-255")))
+    }
+    fn keycode(&self, k: &str) -> std::result::Result<u8, ApiError> {
+        let s = self.string(k)?;
+        keycode::parse(&s).ok_or_else(|| ApiError::invalid(format!("{k}: unknown key code {s:?}; see keycodes.list")))
     }
     fn color(&self, k: &str) -> std::result::Result<Rgb, ApiError> {
         let s = self.string(k)?;

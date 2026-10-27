@@ -74,26 +74,66 @@ Volatile; nothing is written to flash.
 3. Single key: command 30 as above.
 4. `WootDevResetAll` (32) gives the LEDs back to the keyboard.
 
-## Structured output reports
+## Structured output reports (verified against Wootility v5.4 captures)
 
 ```
-[report_id, 0xD1, 0xDA, report_type, len_hi, len_lo, (prefix…), protobuf…]
+[report_id, 0xD1, 0xDA, type, flags, len_lo, len_hi, protobuf…]
 ```
-padded to the chosen report id's size. `len` counts the protobuf only.
+padded to the chosen report id's size. `flags`: `0x00` = active profile in
+RAM (live, lost on profile reload), `(slot << 1) | 1` = write that flash
+slot (`0x07` = slot 3), `0x01` = global. The mapping report has a longer
+header: `[0x14, flags, layer, 0, 0, len_lo, len_hi, protobuf]`.
 
-| type | name | prefix | protobuf (`proto/wooting.proto`) |
-|------|------|--------|----------|
-| 0x0E | RgbProfileColorsPart1 | slot byte | `RgbRows` rows 0..2, packed RGB565 per column |
-| 0x0F | RgbProfileColorsPart2 | slot byte | `RgbRows` rows 3..5 |
-| 0x16 | RgbProfileCore | none? | `RgbProfileCore` (brightness) — *write path unverified: a write followed by Save did not change the read-back* |
-| 0x17 | GlobalSettings | none | `GlobalSettings` — *unverified write* |
-| 0x14 | MappingProfile | ? | *unverified* |
-| 0x0B | WootDevRawReport | – | raw RGB565 grid (same as the direct frame) |
+The firmware encodes every scalar, including zeros (`18 00`), and rejects
+messages without them, so our `.proto` declares those fields `optional`.
 
-Writing colours: send 0x0E and 0x0F with the slot prefix, then
-`SaveRgbProfile` with p3 = slot. **Sending `SaveRgbProfile` without rows
-first copies the active profile's colours (and brightness) into that slot** —
-observed by accident on slot 0.
+| type | name | protobuf (`proto/wooting.proto`) |
+|------|------|----------|
+| 0x07 | DeviceConfig | raw 7 bytes, no length |
+| 0x0E / 0x0F | RgbProfileColorsPart1/2 | `RgbRows` rows 0..2 / 3..5, packed RGB565; always flags 0, then `SaveRgbProfile(p3=slot)` |
+| 0x11 | KeyboardProfile | `KeyboardProfile`: actuation, rapid trigger, sensitivities, Tachyon. Preceded by an empty 0x1D with the same flags |
+| 0x12, 0x15, 0x1D | ? | sent empty around profile writes |
+| 0x13 | AnalogCurve | 4 (x,y) points + extras; constant so far |
+| 0x14 | MappingProfile | 6 rows × 21 key codes per layer (0 main, 1–2 Fn, 3 empty); empty = factory default |
+| 0x16 | RgbProfileCore | brightness + opaque effect layers (field 4) |
+| 0x17 | GlobalSettings | power saving timers; flags 0x01 |
+| 0x18 | AdvancedKeys | mod-tap entries; then `SaveAkcProfile(p3=slot)` |
+| 0x1A | ProfileMetadata | name, badge colour, icon |
+| 0x1B | profile blob | 4 × 510-byte zero chunks on profile creation, flags `chunk<<5 \| 6` |
+| 0x28 | ? | `12 02 08 00`, flags 0x01, after save |
+| 0x0B | WootDevRawReport | raw RGB565 grid (same as the direct frame) |
+
+Reads of 0x11/0x14/0x1A/0x35/0x36/0x50 data take the slot in p3 (byte 4);
+`GetMappingProfile` takes the layer in p1 (byte 6). Reads return the flash
+copy, so a RAM-only write never shows in a read-back.
+
+Writing colours: send 0x0E and 0x0F (flags 0), then `SaveRgbProfile` with
+p3 = slot. **Sending `SaveRgbProfile` without rows first copies the active
+profile's colours (and brightness) into that slot** — observed by accident.
+
+## KeyboardProfile distances
+
+`0x4000 | round(mm / 4.0 * 16383)`: 1.0 mm = 0x5000, 1.6 mm = 0x5999,
+4.0 mm = 0x7FFF. Fields: 1 actuation, 3 rapid trigger on, 4 press
+sensitivity, 8 release sensitivity (only with split sensitivity), 5 Tachyon
+(also sets field 9 = 1 and limits brightness to 179).
+
+## Key codes
+
+HID usage − 3 for ordinary keys (A = 1 … F1 = 0x37, Delete = 0x49, arrows
+0x4C–0x4F), modifiers 0x63–0x6A (LCtrl … RGui), 0x77 Menu, 0xE7 Fn1,
+0xEA Fn2, 0xC0–0xC5 / 0xE0–0xE8 media and specials (names TBD), 0xFF none.
+See `crates/wooting-proto/src/keycode.rs`.
+
+## Profiles (create / delete, Wootility v5.4)
+
+Create slot N: `CreateProfile(64, p3=N)`, RGB core + rows + `SaveRgbProfile(N)`,
+four zero 0x1B chunks, then 0x1D/0x11/0x13/0x12/0x14×4/0x15 with flags
+`(N<<1)|1`, 0x18 + `SaveAkcProfile(N)`, 0x1A, `PostSaveProfile(72, p3=N)`.
+Delete: `DeleteProfile(63, p3=N)`. Switching in Wootility means
+`ActivateProfile(N)` followed by pushing the whole profile into RAM.
+
+Full byte-level captures: `docs/captures/README.md`.
 
 ## Profiles
 
@@ -118,9 +158,12 @@ row5: 63 66 65 ff 29 ff 29 ff 29 ff 69 77 67 e7       Ctrl Win Alt Space×3 Alt 
 
 The space bar occupies matrix cells (5,4), (5,6), (5,8).
 
-## Open items (Phase 2)
+## Open items
 
-Write formats for key mappings, actuation, rapid trigger, DKS, Mod-Tap, AKC,
-gamepad and global settings, and the exact targeting of `RgbProfileCore`
-writes, are to be recovered by capturing Wootility's WebHID traffic
-(`tools/webhid-capture/hook.js`).
+- Names of the media/special key codes (0xC0…, 0xE0…), the 0x12/0x15/0x1D
+  reports and the 0x1B blob.
+- Writing mod-tap / DKS / gamepad entries (0x18 format is known for mod-tap;
+  no write path yet).
+- RGB effect layer schema inside `RgbProfileCore.effects`.
+- Whether a RAM-only (flags 0) KeyboardProfile write takes effect without a
+  profile reload; Wootility relies on it, we could not observe it.

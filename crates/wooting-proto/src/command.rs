@@ -86,6 +86,12 @@ commands! {
     GetRgbLayer = 57,
     GetFlashStats = 58,
     GetRgbBins = 59,
+    // 63/64/72 seen from Wootility v5.4 (p3 = slot); 73/74 are its polling commands.
+    DeleteProfile = 63,
+    CreateProfile = 64,
+    PostSaveProfile = 72,
+    Poll73 = 73,
+    AnalogReport = 74,
 }
 
 impl Command {
@@ -94,7 +100,11 @@ impl Command {
     pub fn is_dangerous(self) -> bool {
         matches!(
             self,
-            Command::ResetToBootloader | Command::ResetSettings | Command::SoftReset
+            Command::ResetToBootloader
+                | Command::ResetSettings
+                | Command::SoftReset
+                | Command::DeleteProfile
+                | Command::CreateProfile
         )
     }
 
@@ -128,12 +138,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ids_are_dense() {
-        for (i, c) in Command::ALL.iter().enumerate() {
-            assert_eq!(*c as usize, i);
-            assert_eq!(Command::from_u8(i as u8), Some(*c));
+    fn ids_roundtrip() {
+        for c in Command::ALL {
+            assert_eq!(Command::from_u8(*c as u8), Some(*c));
         }
-        assert_eq!(Command::ALL.len(), 60);
+        assert_eq!(Command::ALL[..60].iter().map(|c| *c as usize).collect::<Vec<_>>(), (0..60).collect::<Vec<_>>());
+        assert_eq!(Command::from_u8(63), Some(Command::DeleteProfile));
     }
 
     #[test]

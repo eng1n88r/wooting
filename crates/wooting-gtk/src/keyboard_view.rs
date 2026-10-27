@@ -10,8 +10,8 @@ pub struct State {
     pub layout: Option<Layout>,
     pub frame: Frame,
     pub selected: HashSet<String>,
-    /// Key codes from the mapping profile, by key id (keymap page).
-    pub codes: std::collections::HashMap<String, u8>,
+    /// Key code names from the mapping profile, by key id (keymap page).
+    pub codes: std::collections::HashMap<String, String>,
     pub show_codes: bool,
 }
 
@@ -148,7 +148,7 @@ impl KeyboardView {
             let text = if st.show_codes {
                 st.codes
                     .get(&key.id)
-                    .map(|c| c.to_string())
+                    .cloned()
                     .unwrap_or_else(|| "·".into())
             } else {
                 key.label.clone()

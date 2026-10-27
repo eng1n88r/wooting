@@ -40,10 +40,19 @@ enum Cmd {
     Theme(ThemeArgs),
     /// Dump every readable setting to a JSON backup file.
     Backup,
-    /// Show the active profile's raw key mapping matrix.
-    Keymap,
-    /// Global settings.
-    Settings,
+    /// Key mapping.
+    Map(MapArgs),
+    /// Actuation point, rapid trigger, Tachyon.
+    Actuation(ActuationArgs),
+    /// Global settings (RGB power saving).
+    Settings {
+        /// Minutes until lighting dims (0 = never).
+        #[arg(long)]
+        dim: Option<u32>,
+        /// Minutes until lighting turns off (0 = never).
+        #[arg(long)]
+        off: Option<u32>,
+    },
     /// Call any API method with a JSON params object.
     Call { method: String, params: Option<String> },
     /// List API methods.
@@ -64,6 +73,93 @@ enum ProfileCmd {
     List,
     /// Activate profile slot N (0-based) or by name.
     Activate { slot: String },
+    /// Rename a profile slot and/or set its badge colour.
+    Rename {
+        slot: u8,
+        name: Option<String>,
+        #[arg(long)]
+        color: Option<Rgb>,
+    },
+    /// Delete a profile slot (irreversible).
+    Delete {
+        slot: u8,
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+#[derive(Args)]
+struct MapArgs {
+    #[command(subcommand)]
+    cmd: MapCmd,
+}
+
+#[derive(Subcommand)]
+enum MapCmd {
+    /// Show a layer's mapping (0 = main, 1/2 = Fn layers).
+    Show {
+        #[arg(long, default_value_t = 0)]
+        layer: u8,
+        #[arg(long)]
+        slot: Option<u8>,
+    },
+    /// Remap keys: `woot map set capslock=esc esc=grave`.
+    Set {
+        assignments: Vec<String>,
+        #[arg(long, default_value_t = 0)]
+        layer: u8,
+        /// Also write the active profile to flash.
+        #[arg(long)]
+        persist: bool,
+    },
+    /// Restore the factory mapping of a layer.
+    Reset {
+        #[arg(long, default_value_t = 0)]
+        layer: u8,
+        #[arg(long)]
+        persist: bool,
+    },
+    /// List key code names.
+    Codes,
+}
+
+#[derive(Args)]
+struct ActuationArgs {
+    #[command(subcommand)]
+    cmd: ActuationCmd,
+}
+
+#[derive(Subcommand)]
+enum ActuationCmd {
+    /// Show settings of a profile slot (default: active).
+    Show {
+        #[arg(long)]
+        slot: Option<u8>,
+    },
+    /// Change settings for all keys of the active profile.
+    Set {
+        /// Actuation point in mm (0.1-4.0).
+        #[arg(long)]
+        point: Option<f32>,
+        /// Rapid trigger on/off.
+        #[arg(long)]
+        rapid_trigger: Option<bool>,
+        /// Rapid trigger press sensitivity in mm.
+        #[arg(long)]
+        press: Option<f32>,
+        /// Rapid trigger release sensitivity in mm (omit = same as press).
+        #[arg(long)]
+        release: Option<f32>,
+        /// Drop the separate release sensitivity.
+        #[arg(long)]
+        no_split: bool,
+        /// Tachyon mode on/off.
+        #[arg(long)]
+        tachyon: Option<bool>,
+        /// Also write the active profile to flash.
+        #[arg(long)]
+        persist: bool,
+    },
 }
 
 #[derive(Args)]
@@ -244,6 +340,13 @@ fn main() -> Result<()> {
                 };
                 call("profile.activate", json!({"slot": n}))?
             }
+            ProfileCmd::Rename { slot, name, color } => {
+                let mut p = json!({"slot": slot});
+                if let Some(n) = name { p["name"] = n.into(); }
+                if let Some(c) = color { p["color"] = c.to_hex().into(); }
+                call("profile.rename", p)?
+            }
+            ProfileCmd::Delete { slot, confirm } => call("profile.delete", json!({"slot": slot, "confirm": confirm}))?,
         },
         Cmd::Rgb(RgbArgs { cmd }) => match cmd {
             RgbCmd::Fill { color } => call("rgb.fill", json!({"color": color.to_hex()}))?,
@@ -302,20 +405,63 @@ fn main() -> Result<()> {
             }
         },
         Cmd::Backup => call("backup.create", json!({}))?,
-        Cmd::Keymap => {
-            let v = call("keymap.get", json!({}))?;
-            if !json {
-                for row in v["rows"].as_array().into_iter().flatten() {
-                    let cells: Vec<String> = row.as_array().into_iter().flatten()
-                        .map(|c| match c.as_u64() { Some(255) => " --".into(), Some(n) => format!("{n:3}"), None => "  ?".into() })
-                        .collect();
-                    println!("{}", cells.join(" "));
+        Cmd::Map(MapArgs { cmd }) => match cmd {
+            MapCmd::Show { layer, slot } => {
+                let v = call("keymap.get", json!({"layer": layer, "slot": slot}))?;
+                if !json {
+                    print_mapping(&v);
+                    return Ok(());
                 }
-                return Ok(());
+                v
             }
-            v
+            MapCmd::Set { assignments, layer, persist } => {
+                let mut keys = serde_json::Map::new();
+                for a in assignments {
+                    let (k, v) = a.split_once('=').with_context(|| format!("expected key=code, got {a:?}"))?;
+                    keys.insert(k.to_string(), Value::String(v.to_string()));
+                }
+                let v = call("keymap.set", json!({"keys": keys, "layer": layer, "persist": persist}))?;
+                if !json {
+                    print_mapping(&v);
+                    return Ok(());
+                }
+                v
+            }
+            MapCmd::Reset { layer, persist } => call("keymap.reset", json!({"layer": layer, "persist": persist}))?,
+            MapCmd::Codes => {
+                let v = call("keycodes.list", json!({}))?;
+                if !json {
+                    for c in v["codes"].as_array().into_iter().flatten() {
+                        println!("0x{:02x}  {}", c["code"].as_u64().unwrap_or(0), c["name"].as_str().unwrap_or(""));
+                    }
+                    return Ok(());
+                }
+                v
+            }
+        },
+        Cmd::Actuation(ActuationArgs { cmd }) => match cmd {
+            ActuationCmd::Show { slot } => call("settings.get", json!({"slot": slot}))?,
+            ActuationCmd::Set { point, rapid_trigger, press, release, no_split, tachyon, persist } => {
+                let mut p = json!({"persist": persist});
+                if let Some(v) = point { p["actuation_mm"] = v.into(); }
+                if let Some(v) = rapid_trigger { p["rapid_trigger"] = v.into(); }
+                if let Some(v) = press { p["rt_press_mm"] = v.into(); }
+                if let Some(v) = release { p["rt_release_mm"] = v.into(); }
+                if no_split { p["rt_release_mm"] = Value::Null; }
+                if let Some(v) = tachyon { p["tachyon"] = v.into(); }
+                call("settings.set", p)?
+            }
+        },
+        Cmd::Settings { dim, off } => {
+            if dim.is_none() && off.is_none() {
+                call("settings.global.get", json!({}))?
+            } else {
+                let mut p = json!({});
+                if let Some(d) = dim { p["dim_after_minutes"] = d.into(); }
+                if let Some(o) = off { p["off_after_minutes"] = o.into(); }
+                call("settings.global.set", p)?
+            }
         }
-        Cmd::Settings => call("settings.global.get", json!({}))?,
         Cmd::Call { method, params } => {
             let p: Value = match params {
                 Some(s) => serde_json::from_str(&s).context("params must be a JSON object")?,
@@ -379,6 +525,34 @@ fn open_transport(sel: Option<&str>) -> Result<wooting_hid::Transport> {
         Some(s) => wooting_hid::Transport::open_matching(s)?,
         None => wooting_hid::Transport::open_first()?,
     })
+}
+
+fn print_mapping(v: &Value) {
+    println!(
+        "slot {} layer {}{}",
+        v["slot"],
+        v["layer"],
+        if v["stored"].as_bool().unwrap_or(false) { "" } else { " (factory default, nothing stored)" }
+    );
+    let keys = v["keys"].as_object();
+    let mut items: Vec<(String, String)> = keys
+        .into_iter()
+        .flatten()
+        .map(|(k, c)| (k.clone(), c["name"].as_str().unwrap_or("?").to_string()))
+        .collect();
+    items.sort();
+    let mut line = String::new();
+    for (k, n) in items {
+        let cell = format!("{k}={n}");
+        if line.len() + cell.len() > 96 {
+            println!("{line}");
+            line.clear();
+        }
+        line.push_str(&format!("{cell:<18}"));
+    }
+    if !line.is_empty() {
+        println!("{line}");
+    }
 }
 
 fn print_human(v: &Value) {

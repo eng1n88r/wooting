@@ -49,9 +49,22 @@ Reset/bootloader commands need `confirm: true`.
 `omarchy-theme-set` repaints the keyboard from the theme's `colors.toml`
 (`keyboard.rgb` overrides the base colour) and persists it.
 
+## CLI cheat sheet
+
+```sh
+woot rgb fill '#7aa2f7'            woot rgb keys esc=#f7768e space=#9ece6a
+woot rgb image photo.jpg           woot rgb save            woot rgb release
+woot theme apply --persist         woot profile list        woot profile activate Omarchy
+woot map show --layer 1            woot map set capslock=esc --persist
+woot actuation set --point 1.2 --rapid-trigger true --press 0.3 --persist
+woot settings --dim 5 --off 30     woot backup              woot methods
+```
+
 ## Status
 
-- Done: RGB (direct and stored), brightness read, profiles, image/theme
-  painting, daemon, HTTP, MCP, CLI, GTK app (lighting, keymap view, device).
-- Next: capture Wootility traffic to recover the write formats for key
-  mapping, actuation, rapid trigger and settings (`docs/protocol.md`).
+- Done: RGB (direct and stored), brightness, profiles (list, activate,
+  rename, delete), key mapping per layer, actuation / rapid trigger /
+  Tachyon, global power-saving settings, image/theme painting, daemon, HTTP,
+  MCP, CLI, GTK app.
+- Protocol notes and the Wootility captures they came from: `docs/`.
+- Not yet: mod-tap / advanced key editing, RGB effect layers, gamepad.
