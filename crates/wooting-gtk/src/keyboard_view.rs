@@ -1,8 +1,12 @@
 //! A drawn keyboard: shows per-key colours, supports click/shift-click
 //! selection and drag-and-drop of image files.
 
-use gtk::{cairo, gdk, pango, prelude::*};
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use gtk::{cairo, gdk, gio, pango, prelude::*};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 use wooting_proto::{Frame, Layout, Rgb};
 
 #[derive(Default)]
@@ -10,15 +14,73 @@ pub struct State {
     pub layout: Option<Layout>,
     pub frame: Frame,
     pub selected: HashSet<String>,
-    /// Key code names from the mapping profile, by key id (keymap page).
-    pub codes: std::collections::HashMap<String, String>,
+    /// `(code name, label)` from the mapping profile, by key id (keymap page).
+    pub codes: HashMap<String, (String, String)>,
     pub show_codes: bool,
+}
+
+type IconCache = HashMap<(String, i32), Option<cairo::ImageSurface>>;
+
+/// Codes drawn as Adwaita symbolic icons instead of text.
+fn icon_for(code_name: &str) -> Option<&'static str> {
+    Some(match code_name {
+        "prev_track" => "media-skip-backward-symbolic",
+        "play_pause" => "media-playback-start-symbolic",
+        "next_track" => "media-skip-forward-symbolic",
+        "mute" => "audio-volume-muted-symbolic",
+        "volume_down" => "audio-volume-low-symbolic",
+        "volume_up" => "audio-volume-high-symbolic",
+        _ => return None,
+    })
+}
+
+/// Load a symbolic icon as an alpha mask surface.
+fn load_icon(name: &str, size: i32) -> Option<cairo::ImageSurface> {
+    let display = gdk::Display::default()?;
+    let theme = gtk::IconTheme::for_display(&display);
+    let paintable = theme.lookup_icon(name, &[], size, 1, gtk::TextDirection::None, gtk::IconLookupFlags::empty());
+    let file: gio::File = paintable.file()?;
+    let texture = gdk::Texture::from_file(&file).ok()?;
+    // Rasterise at the requested size: load the SVG scaled through a pixbuf.
+    let pixbuf = gdk::gdk_pixbuf::Pixbuf::from_stream_at_scale(
+        &file.read(gio::Cancellable::NONE).ok()?,
+        size,
+        size,
+        true,
+        gio::Cancellable::NONE,
+    )
+    .ok()?;
+    let _ = texture;
+    let w = pixbuf.width();
+    let h = pixbuf.height();
+    let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).ok()?;
+    {
+        let stride = surface.stride() as usize;
+        let mut data = surface.data().ok()?;
+        let src = pixbuf.read_pixel_bytes();
+        let src_stride = pixbuf.rowstride() as usize;
+        let n = pixbuf.n_channels() as usize;
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let a = if n == 4 { src[y * src_stride + x * n + 3] } else { 255 };
+                let o = y * stride + x * 4;
+                // Premultiplied white with the icon's alpha; the draw step masks with the text colour.
+                data[o] = a;
+                data[o + 1] = a;
+                data[o + 2] = a;
+                data[o + 3] = a;
+            }
+        }
+    }
+    Some(surface)
 }
 
 #[derive(Clone)]
 pub struct KeyboardView {
     pub area: gtk::DrawingArea,
     pub state: Rc<RefCell<State>>,
+    /// Rendered symbolic icons by (icon name, pixel size).
+    icons: Rc<RefCell<IconCache>>,
 }
 
 const PAD: f64 = 8.0;
@@ -29,7 +91,7 @@ impl KeyboardView {
         area.set_hexpand(true);
         area.set_content_height(300);
         let state = Rc::new(RefCell::new(State::default()));
-        let view = KeyboardView { area, state };
+        let view = KeyboardView { area, state, icons: Rc::new(RefCell::new(HashMap::new())) };
         let v = view.clone();
         view.area.set_draw_func(move |_, cr, w, h| v.draw(cr, w as f64, h as f64));
 
@@ -145,14 +207,29 @@ impl KeyboardView {
             } else {
                 cr.set_source_rgba(1.0, 1.0, 1.0, 0.9);
             }
-            let text = if st.show_codes {
+            let (code_name, text) = if st.show_codes {
                 st.codes
                     .get(&key.id)
                     .cloned()
-                    .unwrap_or_else(|| "·".into())
+                    .unwrap_or_else(|| (String::new(), "·".into()))
             } else {
-                key.label.clone()
+                (String::new(), key.label.clone())
             };
+            if let Some(icon) = icon_for(&code_name) {
+                let size = ((kw.min(kh)) * 0.55).round().max(8.0) as i32;
+                let surface = self
+                    .icons
+                    .borrow_mut()
+                    .entry((icon.to_string(), size))
+                    .or_insert_with(|| load_icon(icon, size))
+                    .clone();
+                if let Some(surf) = surface {
+                    let ix = x + (kw - surf.width() as f64) / 2.0;
+                    let iy = y + (kh - surf.height() as f64) / 2.0;
+                    let _ = cr.mask_surface(&surf, ix, iy);
+                    continue;
+                }
+            }
             if text.is_empty() {
                 continue;
             }
