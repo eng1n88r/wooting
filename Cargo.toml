@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/exbar/wooting"
+repository = "https://github.com/eng1n88r/wooting"
 
 [workspace.dependencies]
 wooting-proto = { path = "crates/wooting-proto" }

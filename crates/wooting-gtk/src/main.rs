@@ -7,7 +7,7 @@ mod pages;
 
 use adw::prelude::*;
 
-const APP_ID: &str = "io.github.exbar.Wooting";
+const APP_ID: &str = "io.github.eng1n88r.Wooting";
 
 fn main() -> gtk::glib::ExitCode {
     tracing_subscriber::fmt()

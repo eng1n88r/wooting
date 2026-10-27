@@ -145,7 +145,7 @@ enum Cmd {
     Map(MapArgs),
     /// Actuation point, rapid trigger, Tachyon.
     Actuation(ActuationArgs),
-    /// Advanced keys (mod-tap).
+    /// Advanced keys (mod-tap, toggle, Rappy Snappy, SOCD, DKS).
     Akc(AkcArgs),
     /// Device-wide settings (RGB power saving, Num Lock, debounce, 6KRO, gamepad).
     Settings {
