@@ -81,11 +81,16 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     let ctx = Ctx { backend, view, toast: toast.clone(), status: status.clone() };
 
     let stack = adw::ViewStack::new();
-    stack.add_titled_with_icon(&lighting_page(&ctx), Some("lighting"), "Lighting", "weather-clear-symbolic");
-    stack.add_titled_with_icon(&keymap_page(&ctx), Some("keymap"), "Keymap", "input-keyboard-symbolic");
-    stack.add_titled_with_icon(&actuation_page(&ctx), Some("actuation"), "Actuation", "object-flip-vertical-symbolic");
-    stack.add_titled_with_icon(&settings_page(&ctx), Some("settings"), "Settings", "preferences-system-symbolic");
-    stack.add_titled_with_icon(&device_page(&ctx), Some("device"), "Device", "drive-harddisk-symbolic");
+    // Pages scroll independently; the keyboard view above stays put. Without
+    // this the stack takes the tallest page's height and overflows short
+    // (tiled) windows.
+    stack.set_vhomogeneous(false);
+    stack.set_vexpand(true);
+    stack.add_titled_with_icon(&scrolled(lighting_page(&ctx)), Some("lighting"), "Lighting", "weather-clear-symbolic");
+    stack.add_titled_with_icon(&scrolled(keymap_page(&ctx)), Some("keymap"), "Keymap", "input-keyboard-symbolic");
+    stack.add_titled_with_icon(&scrolled(actuation_page(&ctx)), Some("actuation"), "Actuation", "object-flip-vertical-symbolic");
+    stack.add_titled_with_icon(&scrolled(settings_page(&ctx)), Some("settings"), "Settings", "preferences-system-symbolic");
+    stack.add_titled_with_icon(&scrolled(device_page(&ctx)), Some("device"), "Device", "drive-harddisk-symbolic");
 
     let switcher = adw::ViewSwitcher::builder().stack(&stack).policy(adw::ViewSwitcherPolicy::Wide).build();
     let header = adw::HeaderBar::new();
@@ -94,6 +99,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     // Keyboard view on top, page content below.
     let kb_frame = gtk::Frame::new(None);
     kb_frame.set_child(Some(&ctx.view.area));
+    kb_frame.set_vexpand(false);
     kb_frame.set_margin_start(12);
     kb_frame.set_margin_end(12);
     kb_frame.set_margin_top(12);
@@ -161,6 +167,15 @@ fn install_drop_target(ctx: &Ctx) {
         true
     });
     ctx.view.area.add_controller(target);
+}
+
+fn scrolled(page: gtk::Widget) -> gtk::ScrolledWindow {
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_vexpand(true);
+    scroll.set_propagate_natural_height(false);
+    scroll.set_child(Some(&page));
+    scroll
 }
 
 fn page_box() -> gtk::Box {
@@ -511,11 +526,7 @@ fn keymap_page(ctx: &Ctx) -> gtk::Widget {
         });
     });
     load();
-    let scroll = gtk::ScrolledWindow::new();
-    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    scroll.set_vexpand(true);
-    scroll.set_child(Some(&page));
-    scroll.upcast()
+    page.upcast()
 }
 
 fn actuation_page(ctx: &Ctx) -> gtk::Widget {
