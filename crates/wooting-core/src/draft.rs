@@ -626,7 +626,7 @@ impl ProfileData {
     pub fn gamepad_settings_mut(&mut self) -> &mut pb::gamepad_profile::Settings {
         self.gamepad
             .settings
-            .get_or_insert_with(|| pb::gamepad_profile::Settings {
+            .get_or_insert(pb::gamepad_profile::Settings {
                 angle_enabled: Some(0),
                 square: Some(0),
                 snappy: Some(1),

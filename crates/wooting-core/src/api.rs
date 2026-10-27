@@ -587,7 +587,7 @@ impl Api {
                     Ok(global_json(&kb.global_settings()?))
                 }).map_err(Into::into)
             }
-            "settings.device.get" => self.with_keyboard(|kb| Ok(serde_json::to_value(kb.device_settings()?).map_err(|e| Error::Other(e.to_string()))?)).map_err(Into::into),
+            "settings.device.get" => self.with_keyboard(|kb| serde_json::to_value(kb.device_settings()?).map_err(|e| Error::Other(e.to_string()))).map_err(Into::into),
             "settings.device.set" => {
                 let compat = p.bool("compat_mode");
                 let gamepad = p.bool("gamepad_mode");
@@ -807,7 +807,7 @@ fn gamepad_json(
         .into_iter()
         .map(|(k, b)| (k, Value::String(b)))
         .collect();
-    let s = d.gamepad.settings.clone().unwrap_or_default();
+    let s = d.gamepad.settings.unwrap_or_default();
     let curve = d.gamepad_curve();
     json!({
         "slot": slot,
