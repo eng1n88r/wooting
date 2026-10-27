@@ -17,6 +17,8 @@ pub struct State {
     /// `(code name, label)` from the mapping profile, by key id (keymap page).
     pub codes: HashMap<String, (String, String)>,
     pub show_codes: bool,
+    /// Keys with an advanced-key entry (drawn with a small badge).
+    pub badges: HashSet<String>,
 }
 
 type IconCache = HashMap<(String, i32), Option<cairo::ImageSurface>>;
@@ -200,6 +202,13 @@ impl KeyboardView {
                 cr.set_line_width(1.0);
             }
             let _ = cr.stroke();
+            if st.badges.contains(&key.id) {
+                // Small "MT" badge in the top-right corner.
+                let r = (s * 0.09).max(3.0);
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.85);
+                cr.arc(x + kw - r - 3.0, y + r + 3.0, r, 0.0, std::f64::consts::TAU);
+                let _ = cr.fill();
+            }
             // Label.
             let lum = 0.299 * c.r as f64 + 0.587 * c.g as f64 + 0.114 * c.b as f64;
             if lum > 150.0 {

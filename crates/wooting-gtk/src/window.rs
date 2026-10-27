@@ -89,6 +89,7 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
     stack.add_titled_with_icon(&scrolled(lighting_page(&ctx)), Some("lighting"), "Lighting", "weather-clear-symbolic");
     stack.add_titled_with_icon(&scrolled(keymap_page(&ctx)), Some("keymap"), "Keymap", "input-keyboard-symbolic");
     stack.add_titled_with_icon(&scrolled(actuation_page(&ctx)), Some("actuation"), "Actuation", "object-flip-vertical-symbolic");
+    stack.add_titled_with_icon(&scrolled(advanced_page(&ctx)), Some("advanced"), "Advanced", "view-more-symbolic");
     stack.add_titled_with_icon(&scrolled(settings_page(&ctx)), Some("settings"), "Settings", "preferences-system-symbolic");
     stack.add_titled_with_icon(&scrolled(device_page(&ctx)), Some("device"), "Device", "drive-harddisk-symbolic");
 
@@ -635,6 +636,139 @@ fn actuation_page(ctx: &Ctx) -> gtk::Widget {
     apply.connect_clicked(make_apply(false));
     save.connect_clicked(make_apply(true));
     load();
+    page.upcast()
+}
+
+/// Code names offered for mod-tap actions, with palette labels.
+fn code_choices() -> Vec<(String, String)> {
+    PALETTE
+        .iter()
+        .flat_map(|(_, keys)| keys.iter())
+        .filter(|(name, _)| *name != "none")
+        .map(|(name, label)| {
+            let label = if label.ends_with("-symbolic") { name.replace('_', " ") } else { label.to_string() };
+            (name.to_string(), label)
+        })
+        .collect()
+}
+
+fn advanced_page(ctx: &Ctx) -> gtk::Widget {
+    let page = page_box();
+    let group = adw::PreferencesGroup::builder()
+        .title("Advanced keys")
+        .description("Mod-tap: a key sends one action while held and another when tapped. Other advanced key kinds (DKS, SOCD, Rappy Snappy) are shown but can only be removed.")
+        .build();
+
+    let choices = Rc::new(code_choices());
+    let labels: Vec<&str> = choices.iter().map(|(_, l)| l.as_str()).collect();
+    let hold = gtk::DropDown::from_strings(&labels);
+    hold.set_enable_search(true);
+    hold.set_valign(gtk::Align::Center);
+    let tap = gtk::DropDown::from_strings(&labels);
+    tap.set_enable_search(true);
+    tap.set_valign(gtk::Align::Center);
+    let add = gtk::Button::with_label("Add mod-tap to selected key");
+    add.add_css_class("suggested-action");
+    add.set_valign(gtk::Align::Center);
+    let hold_row = adw::ActionRow::builder().title("Hold").subtitle("Sent while the key is held").build();
+    hold_row.add_suffix(&hold);
+    let tap_row = adw::ActionRow::builder().title("Tap").subtitle("Sent when the key is tapped").build();
+    tap_row.add_suffix(&tap);
+    let add_row = adw::ActionRow::builder().title("Select one key on the keyboard, then").build();
+    add_row.add_suffix(&add);
+    group.add(&hold_row);
+    group.add(&tap_row);
+    group.add(&add_row);
+    page.append(&group);
+
+    let list_group = adw::PreferencesGroup::builder().title("Configured keys").build();
+    let listbox = gtk::ListBox::new();
+    listbox.add_css_class("boxed-list");
+    listbox.set_selection_mode(gtk::SelectionMode::None);
+    list_group.add(&listbox);
+    page.append(&list_group);
+
+    // The delete buttons need to call refresh, which is defined below; the
+    // cell is filled in once refresh exists.
+    let refresh_cell: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let c = ctx.clone();
+    let lb = listbox.clone();
+    let rc = refresh_cell.clone();
+    let refresh: Rc<dyn Fn()> = Rc::new(move || {
+        let c = c.clone();
+        let lb = lb.clone();
+        let rc = rc.clone();
+        spawn(async move {
+            while let Some(child) = lb.first_child() {
+                lb.remove(&child);
+            }
+            let Some(v) = c.call("advanced_keys.get", json!({})).await else { return };
+            let entries = v["entries"].as_array().cloned().unwrap_or_default();
+            let mut badges = std::collections::HashSet::new();
+            if entries.is_empty() {
+                lb.append(&adw::ActionRow::builder().title("No advanced keys in this profile").build());
+            }
+            for e in entries {
+                let key = e["key"].as_str().unwrap_or("?").to_string();
+                badges.insert(key.clone());
+                let kind = e["kind"].as_str().unwrap_or("?");
+                let subtitle = if kind == "mod_tap" {
+                    format!(
+                        "Mod-tap · hold: {} · tap: {}",
+                        e["hold"].as_str().map(|n| wooting_proto::keycode::parse(n).map(wooting_proto::keycode::label).unwrap_or(n.into())).unwrap_or_default(),
+                        e["tap"].as_str().map(|n| wooting_proto::keycode::parse(n).map(wooting_proto::keycode::label).unwrap_or(n.into())).unwrap_or_default()
+                    )
+                } else {
+                    "Unknown kind (kept as is)".to_string()
+                };
+                let row = adw::ActionRow::builder().title(&key).subtitle(subtitle).build();
+                let del = gtk::Button::from_icon_name("user-trash-symbolic");
+                del.add_css_class("flat");
+                del.set_valign(gtk::Align::Center);
+                let c2 = c.clone();
+                let rc2 = rc.clone();
+                del.connect_clicked(move |_| {
+                    let c2 = c2.clone();
+                    let key = key.clone();
+                    let rc2 = rc2.clone();
+                    spawn(async move {
+                        if c2.call("advanced_keys.remove", json!({"key": key})).await.is_some() {
+                            c2.toast("Advanced key removed");
+                        }
+                        if let Some(r) = rc2.borrow().clone() {
+                            r();
+                        }
+                    });
+                });
+                row.add_suffix(&del);
+                lb.append(&row);
+            }
+            c.view.state.borrow_mut().badges = badges;
+            c.view.area.queue_draw();
+        });
+    });
+    *refresh_cell.borrow_mut() = Some(refresh.clone());
+
+    let c = ctx.clone();
+    let (h, t, ch) = (hold.clone(), tap.clone(), choices.clone());
+    let r = refresh.clone();
+    add.connect_clicked(move |_| {
+        let keys = c.view.selected();
+        if keys.len() != 1 {
+            c.toast("Select exactly one key on the keyboard");
+            return;
+        }
+        let params = json!({"key": keys[0], "hold": ch[h.selected() as usize].0, "tap": ch[t.selected() as usize].0});
+        let c = c.clone();
+        let r = r.clone();
+        spawn(async move {
+            if c.call("advanced_keys.set_mod_tap", params).await.is_some() {
+                c.toast("Mod-tap written to keyboard");
+            }
+            r();
+        });
+    });
+    refresh();
     page.upcast()
 }
 

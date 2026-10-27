@@ -8,7 +8,7 @@ pub mod image_map;
 pub mod keyboard;
 pub mod theme;
 
-pub use keyboard::{DeviceSummary, Keyboard, ProfileInfo};
+pub use keyboard::{AdvancedKey, DeviceSummary, Keyboard, ProfileInfo};
 pub use wooting_proto::{Frame, Layout, Rgb};
 
 #[derive(Debug, thiserror::Error)]

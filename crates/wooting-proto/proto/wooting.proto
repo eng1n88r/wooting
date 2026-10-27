@@ -88,16 +88,26 @@ message AnalogCurve {
   Extra extra = 2;
 }
 
-// GetAkcProfile (52) response / AdvancedKeys (0x18) report. Only mod-tap
-// entries have been observed so far.
+// GetAkcProfile (52, p3 = slot) response / AdvancedKeys (0x18) report,
+// committed with SaveAkcProfile (53, p3 = slot). Only mod-tap entries have
+// been observed; other kinds presumably use other entry fields.
 message AdvancedKeys {
   message ModTap { optional uint32 tap = 1; optional uint32 hold = 2; }
   message Entry {
+    // Other entry kinds (DKS, SOCD, Rappy Snappy …) are kept opaque so a
+    // rewrite of the table never drops them. Field 5 was seen on a Rapid
+    // profile: 08 63 10 04 18 00.
+    bytes kind1 = 1;
     ModTap mod_tap = 2;
-    optional uint32 f8 = 8; // observed 96..173
-    optional uint32 f9 = 9; // observed 0
+    bytes kind3 = 3;
+    bytes kind4 = 4;
+    bytes kind5 = 5;
+    bytes kind6 = 6;
+    bytes kind7 = 7;
+    optional uint32 key = 8; // matrix id (row << 5 | col) of the key
+    optional uint32 f9 = 9;  // observed 0
   }
   repeated Entry entries = 1;
-  optional uint32 f2 = 2;
-  optional uint32 count = 3;
+  optional uint32 f2 = 2;    // observed 0
+  optional uint32 count = 3; // entries.len()
 }

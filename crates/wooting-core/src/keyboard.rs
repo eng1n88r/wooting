@@ -18,6 +18,14 @@ pub fn code_to_mm(code: u32) -> f32 {
     ((code & 0x3fff) as f32 / 16383.0 * 4.0 * 100.0).round() / 100.0
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdvancedKey {
+    pub key: String,
+    pub kind: String,
+    pub tap: Option<String>,
+    pub hold: Option<String>,
+}
+
 /// Human view of [`pb::KeyboardProfile`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyboardSettings {
@@ -463,8 +471,80 @@ impl Keyboard {
         self.report_pb(report::kind::GLOBAL_SETTINGS, FLAGS_GLOBAL, g)
     }
 
-    pub fn advanced_keys(&self) -> Result<pb::AdvancedKeys> {
-        self.cmd_pb(Command::GetAkcProfile, [0; 4])
+    pub fn advanced_keys_raw(&self, slot: u8) -> Result<pb::AdvancedKeys> {
+        self.cmd_pb(Command::GetAkcProfile, [0, 0, 0, slot])
+    }
+
+    /// Advanced-key entries of `slot` resolved to key ids.
+    pub fn advanced_keys(&self, slot: u8) -> Result<Vec<AdvancedKey>> {
+        let raw = self.advanced_keys_raw(slot)?;
+        Ok(raw
+            .entries
+            .iter()
+            .map(|e| {
+                let id = e.key.unwrap_or(0) as u8;
+                let key = self
+                    .layout
+                    .key_at_cell(id >> 5, id & 0x1f)
+                    .map(|k| k.id.clone())
+                    .unwrap_or_else(|| format!("cell_{}_{}", id >> 5, id & 0x1f));
+                AdvancedKey {
+                    key,
+                    kind: if e.mod_tap.is_some() { "mod_tap" } else { "unknown" }.to_string(),
+                    tap: e.mod_tap.as_ref().and_then(|m| m.tap).map(|c| keycode::name(c as u8)),
+                    hold: e.mod_tap.as_ref().and_then(|m| m.hold).map(|c| keycode::name(c as u8)),
+                }
+            })
+            .collect())
+    }
+
+    /// Replace the advanced-key table of the active profile and commit it.
+    fn write_advanced_keys(&self, mut raw: pb::AdvancedKeys, slot: u8) -> Result<()> {
+        raw.f2.get_or_insert(0);
+        raw.count = Some(raw.entries.len() as u32);
+        self.report_pb(report::kind::ADVANCED_KEYS, FLAGS_RAM, &raw)?;
+        self.cmd(Command::SaveAkcProfile, [0, 0, 0, slot])?;
+        Ok(())
+    }
+
+    /// Add or replace a mod-tap on `key_id`: `hold` while held, `tap` when tapped.
+    pub fn set_mod_tap(&self, key_id: &str, tap: u8, hold: u8) -> Result<Vec<AdvancedKey>> {
+        let key = self
+            .layout
+            .key(key_id)
+            .ok_or_else(|| Error::UnknownKey(key_id.to_string()))?;
+        let cell = key.cells[0];
+        let id = wooting_proto::rgb::matrix_id(cell[0], cell[1]) as u32;
+        let slot = self.active_profile()?;
+        let mut raw = self.advanced_keys_raw(slot)?;
+        let entry = pb::advanced_keys::Entry {
+            mod_tap: Some(pb::advanced_keys::ModTap { tap: Some(tap as u32), hold: Some(hold as u32) }),
+            key: Some(id),
+            f9: Some(0),
+            ..Default::default()
+        };
+        // Replace in place to keep the table order; append when new.
+        match raw.entries.iter_mut().find(|e| e.key == Some(id)) {
+            Some(e) => *e = entry,
+            None => raw.entries.push(entry),
+        }
+        self.write_advanced_keys(raw, slot)?;
+        self.advanced_keys(slot)
+    }
+
+    /// Remove any advanced-key entry on `key_id`.
+    pub fn remove_advanced_key(&self, key_id: &str) -> Result<Vec<AdvancedKey>> {
+        let key = self
+            .layout
+            .key(key_id)
+            .ok_or_else(|| Error::UnknownKey(key_id.to_string()))?;
+        let cell = key.cells[0];
+        let id = wooting_proto::rgb::matrix_id(cell[0], cell[1]) as u32;
+        let slot = self.active_profile()?;
+        let mut raw = self.advanced_keys_raw(slot)?;
+        raw.entries.retain(|e| e.key != Some(id));
+        self.write_advanced_keys(raw, slot)?;
+        self.advanced_keys(slot)
     }
 
     pub fn analog_values(&self) -> Result<pb::AnalogValues> {
@@ -525,6 +605,22 @@ mod tests {
         let want2 = [0x0a, 0x18, 0x08, 0x99, 0xb3, 0x01, 0x10, 0x01, 0x18, 0x01, 0x20, 0x80, 0xa0, 0x01, 0x28, 0x00, 0x30, 0x02, 0x38, 0x01, 0x40, 0xcd, 0x91, 0x01, 0x48, 0x00];
         assert_eq!(p.encode_to_vec(), want2);
         assert_eq!(code_to_mm(0x4F8F), 0.97);
+    }
+
+    #[test]
+    fn advanced_keys_encode_like_wootility() {
+        // RShift mod-tap: tap Up (0x4f), hold RShift (0x68), matrix id 141.
+        let raw = pb::AdvancedKeys {
+            entries: vec![pb::advanced_keys::Entry {
+                mod_tap: Some(pb::advanced_keys::ModTap { tap: Some(0x4f), hold: Some(0x68) }),
+                key: Some(141),
+                f9: Some(0),
+                ..Default::default()
+            }],
+            f2: Some(0),
+            count: Some(1),
+        };
+        assert_eq!(raw.encode_to_vec(), [0x0a, 0x0b, 0x12, 0x04, 0x08, 0x4f, 0x10, 0x68, 0x40, 0x8d, 0x01, 0x48, 0x00, 0x10, 0x00, 0x18, 0x01]);
     }
 
     #[test]

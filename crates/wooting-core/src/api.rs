@@ -96,7 +96,9 @@ pub fn methods() -> Vec<MethodInfo> {
         MethodInfo { name: "keymap.set", description: "Remap several keys at once: {\"keys\": {\"capslock\": \"esc\", \"esc\": \"grave\"}}.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": "string"}}, "layer": {"type": "integer"}, "persist": {"type": "boolean"}}), &["keys"]) },
         MethodInfo { name: "keymap.reset", description: "Restore the factory mapping of a layer.", params: obj(json!({"layer": {"type": "integer"}, "persist": {"type": "boolean"}}), &[]) },
         MethodInfo { name: "keycodes.list", description: "All key code names accepted by keymap.set_key.", params: obj(json!({}), &[]) },
-        MethodInfo { name: "advanced_keys.get", description: "Mod-tap and other advanced key entries of the active profile (raw).", params: obj(json!({}), &[]) },
+        MethodInfo { name: "advanced_keys.get", description: "Advanced keys (mod-tap) of a profile slot (default: active): key id, hold action, tap action.", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
+        MethodInfo { name: "advanced_keys.set_mod_tap", description: "Make a key a mod-tap: 'hold' is sent while held, 'tap' when tapped (key code names). Written to the active profile.", params: obj(json!({"key": {"type": "string"}, "hold": {"type": "string"}, "tap": {"type": "string"}}), &["key", "hold", "tap"]) },
+        MethodInfo { name: "advanced_keys.remove", description: "Remove the advanced-key entry from a key.", params: obj(json!({"key": {"type": "string"}}), &["key"]) },
         MethodInfo { name: "profile.rename", description: "Rename a profile slot and/or set its badge colour.", params: obj(json!({"slot": {"type": "integer"}, "name": {"type": "string"}, "color": color}), &["slot"]) },
         MethodInfo { name: "profile.delete", description: "Delete an onboard profile slot. Irreversible; needs confirm=true.", params: obj(json!({"slot": {"type": "integer"}, "confirm": {"type": "boolean"}}), &["slot"]) },
         MethodInfo { name: "backup.create", description: "Dump every readable profile/setting to a JSON file and return its path.", params: obj(json!({}), &[]) },
@@ -367,7 +369,23 @@ impl Api {
                 }).map_err(Into::into)
             }
             "keycodes.list" => Ok(json!({"codes": keycode::KEYCODES.iter().map(|(c, n)| json!({"code": c, "name": n})).collect::<Vec<_>>()})),
-            "advanced_keys.get" => self.with_keyboard(|kb| Ok(serde_json::to_value(kb.advanced_keys()?).unwrap())).map_err(Into::into),
+            "advanced_keys.get" => {
+                let slot = p.opt_u8("slot")?;
+                self.with_keyboard(|kb| {
+                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
+                    Ok(json!({"slot": slot, "entries": kb.advanced_keys(slot)?}))
+                }).map_err(Into::into)
+            }
+            "advanced_keys.set_mod_tap" => {
+                let key = p.string("key")?;
+                let hold = p.keycode("hold")?;
+                let tap = p.keycode("tap")?;
+                self.with_keyboard(|kb| Ok(json!({"entries": kb.set_mod_tap(&key, tap, hold)?}))).map_err(Into::into)
+            }
+            "advanced_keys.remove" => {
+                let key = p.string("key")?;
+                self.with_keyboard(|kb| Ok(json!({"entries": kb.remove_advanced_key(&key)?}))).map_err(Into::into)
+            }
             "profile.rename" => {
                 let slot = p.u8("slot")?;
                 let name = p.opt_string("name");

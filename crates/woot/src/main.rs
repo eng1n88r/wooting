@@ -44,6 +44,8 @@ enum Cmd {
     Map(MapArgs),
     /// Actuation point, rapid trigger, Tachyon.
     Actuation(ActuationArgs),
+    /// Advanced keys (mod-tap).
+    Akc(AkcArgs),
     /// Global settings (RGB power saving).
     Settings {
         /// Minutes until lighting dims (0 = never).
@@ -121,6 +123,31 @@ enum MapCmd {
     },
     /// List key code names.
     Codes,
+}
+
+#[derive(Args)]
+struct AkcArgs {
+    #[command(subcommand)]
+    cmd: AkcCmd,
+}
+
+#[derive(Subcommand)]
+enum AkcCmd {
+    /// List advanced keys of a profile slot (default: active).
+    List {
+        #[arg(long)]
+        slot: Option<u8>,
+    },
+    /// Make a key a mod-tap: `woot akc modtap capslock --hold lctrl --tap esc`.
+    Modtap {
+        key: String,
+        #[arg(long)]
+        hold: String,
+        #[arg(long)]
+        tap: String,
+    },
+    /// Remove the advanced-key entry from a key.
+    Remove { key: String },
 }
 
 #[derive(Args)]
@@ -439,6 +466,26 @@ fn main() -> Result<()> {
                 v
             }
         },
+        Cmd::Akc(AkcArgs { cmd }) => {
+            let v = match cmd {
+                AkcCmd::List { slot } => call("advanced_keys.get", json!({"slot": slot}))?,
+                AkcCmd::Modtap { key, hold, tap } => call("advanced_keys.set_mod_tap", json!({"key": key, "hold": hold, "tap": tap}))?,
+                AkcCmd::Remove { key } => call("advanced_keys.remove", json!({"key": key}))?,
+            };
+            if !json {
+                for e in v["entries"].as_array().into_iter().flatten() {
+                    println!(
+                        "{:<10} {:<8} hold={:<12} tap={}",
+                        e["key"].as_str().unwrap_or("?"),
+                        e["kind"].as_str().unwrap_or("?"),
+                        e["hold"].as_str().unwrap_or("-"),
+                        e["tap"].as_str().unwrap_or("-")
+                    );
+                }
+                return Ok(());
+            }
+            v
+        }
         Cmd::Actuation(ActuationArgs { cmd }) => match cmd {
             ActuationCmd::Show { slot } => call("settings.get", json!({"slot": slot}))?,
             ActuationCmd::Set { point, rapid_trigger, press, release, no_split, tachyon, persist } => {
