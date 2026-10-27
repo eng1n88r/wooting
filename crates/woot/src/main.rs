@@ -20,6 +20,9 @@ struct Cli {
     /// Never use the daemon; open the keyboard directly.
     #[arg(long, global = true)]
     direct: bool,
+    /// Edit the live draft only (no flash write); commit later with `woot profile save`.
+    #[arg(long, global = true)]
+    draft: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -46,7 +49,7 @@ enum Cmd {
     Actuation(ActuationArgs),
     /// Advanced keys (mod-tap).
     Akc(AkcArgs),
-    /// Global settings (RGB power saving).
+    /// Device-wide settings (RGB power saving, Num Lock, debounce, 6KRO, gamepad).
     Settings {
         /// Minutes until lighting dims (0 = never).
         #[arg(long)]
@@ -54,6 +57,21 @@ enum Cmd {
         /// Minutes until lighting turns off (0 = never).
         #[arg(long)]
         off: Option<u32>,
+        #[arg(long)]
+        numlock_inverted: Option<bool>,
+        #[arg(long)]
+        debounce: Option<bool>,
+        /// Compatibility mode (6KRO); restarts the keyboard.
+        #[arg(long)]
+        compat: Option<bool>,
+        /// Gamepad mode; restarts the keyboard with a different USB identity.
+        #[arg(long)]
+        gamepad: Option<bool>,
+        /// Reset ALL keyboard settings to factory (needs --confirm).
+        #[arg(long)]
+        reset: bool,
+        #[arg(long)]
+        confirm: bool,
     },
     /// Call any API method with a JSON params object.
     Call { method: String, params: Option<String> },
@@ -88,6 +106,35 @@ enum ProfileCmd {
         #[arg(long)]
         confirm: bool,
     },
+    /// Create a profile in the first free slot, copied from another slot.
+    Create {
+        name: String,
+        #[arg(long, default_value_t = 0)]
+        from: u8,
+        #[arg(long)]
+        color: Option<Rgb>,
+    },
+    /// Swap two slots (slot 0 is the default profile).
+    Swap { a: u8, b: u8 },
+    /// Draft status of a slot (dirty / undo / redo).
+    Status { slot: Option<u8> },
+    /// Write the draft to flash.
+    Save { slot: Option<u8> },
+    /// Drop pending edits and reload from flash.
+    Discard { slot: Option<u8> },
+    /// Undo the last draft edit.
+    Undo { slot: Option<u8> },
+    /// Redo the last undone edit.
+    Redo { slot: Option<u8> },
+    /// Export a slot to a JSON file (or stdout).
+    Export { slot: Option<u8>, file: Option<String> },
+    /// Import a JSON file into a slot.
+    Import {
+        slot: u8,
+        file: String,
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -110,16 +157,17 @@ enum MapCmd {
         assignments: Vec<String>,
         #[arg(long, default_value_t = 0)]
         layer: u8,
-        /// Also write the active profile to flash.
-        #[arg(long)]
-        persist: bool,
+    },
+    /// Replace a layer with a preset: default|function|dvorak|colemak|workman|abc.
+    Preset {
+        name: String,
+        #[arg(long, default_value_t = 0)]
+        layer: u8,
     },
     /// Restore the factory mapping of a layer.
     Reset {
         #[arg(long, default_value_t = 0)]
         layer: u8,
-        #[arg(long)]
-        persist: bool,
     },
     /// List key code names.
     Codes,
@@ -145,6 +193,23 @@ enum AkcCmd {
         hold: String,
         #[arg(long)]
         tap: String,
+    },
+    /// Toggle key: tapping locks `code` on/off, holding acts normally.
+    Toggle { key: String, code: String },
+    /// Rappy Snappy between two keys (whichever is pressed deeper wins).
+    Rappy { key: String, other: String },
+    /// SOCD (Snappy Tappy) between two keys.
+    Socd {
+        key: String,
+        other: String,
+        #[arg(long, default_value_t = 1)]
+        mode: u32,
+    },
+    /// DKS: up to four bindings for four travel phases.
+    Dks {
+        key: String,
+        #[arg(num_args = 1..=4)]
+        codes: Vec<String>,
     },
     /// Remove the advanced-key entry from a key.
     Remove { key: String },
@@ -180,13 +245,17 @@ enum ActuationCmd {
         /// Drop the separate release sensitivity.
         #[arg(long)]
         no_split: bool,
+        /// Continuous rapid trigger on/off.
+        #[arg(long)]
+        continuous: Option<bool>,
         /// Tachyon mode on/off.
         #[arg(long)]
         tachyon: Option<bool>,
-        /// Also write the active profile to flash.
-        #[arg(long)]
-        persist: bool,
     },
+    /// Per-key actuation: `woot actuation keys a=2.5 s=1.0 d=-` (- removes).
+    Keys { assignments: Vec<String> },
+    /// Per-key rapid trigger: `woot actuation rt w=on a=off`.
+    Rt { assignments: Vec<String> },
 }
 
 #[derive(Args)]
@@ -300,7 +369,13 @@ fn main() -> Result<()> {
     } else {
         Backend::auto(cli.device.clone())
     };
-    let mut call = |method: &str, params: Value| -> Result<Value> {
+    let draft = cli.draft;
+    let mut call = |method: &str, mut params: Value| -> Result<Value> {
+        if draft {
+            if let Value::Object(m) = &mut params {
+                m.entry("persist").or_insert(Value::Bool(false));
+            }
+        }
         backend
             .call(method, params)
             .map_err(|e| anyhow::anyhow!("{method}: {}", e.message))
@@ -374,6 +449,38 @@ fn main() -> Result<()> {
                 call("profile.rename", p)?
             }
             ProfileCmd::Delete { slot, confirm } => call("profile.delete", json!({"slot": slot, "confirm": confirm}))?,
+            ProfileCmd::Create { name, from, color } => {
+                let mut p = json!({"name": name, "from_slot": from});
+                if let Some(c) = color { p["color"] = c.to_hex().into(); }
+                call("profile.create", p)?
+            }
+            ProfileCmd::Swap { a, b } => call("profile.swap", json!({"a": a, "b": b}))?,
+            ProfileCmd::Status { slot } => call("profile.status", json!({"slot": slot}))?,
+            ProfileCmd::Save { slot } => call("profile.save", json!({"slot": slot}))?,
+            ProfileCmd::Discard { slot } => call("profile.discard", json!({"slot": slot}))?,
+            ProfileCmd::Undo { slot } => call("profile.undo", json!({"slot": slot}))?,
+            ProfileCmd::Redo { slot } => call("profile.redo", json!({"slot": slot}))?,
+            ProfileCmd::Export { slot, file } => {
+                let v = call("profile.export", json!({"slot": slot}))?;
+                match file {
+                    Some(f) => {
+                        std::fs::write(&f, serde_json::to_string_pretty(&v)?)?;
+                        json!({"written": f})
+                    }
+                    None => {
+                        println!("{}", serde_json::to_string_pretty(&v)?);
+                        return Ok(());
+                    }
+                }
+            }
+            ProfileCmd::Import { slot, file, name } => {
+                let text = std::fs::read_to_string(&file).with_context(|| format!("reading {file}"))?;
+                let v: Value = serde_json::from_str(&text)?;
+                let data = v.get("data").cloned().unwrap_or(v);
+                let mut p = json!({"slot": slot, "data": data});
+                if let Some(n) = name { p["name"] = n.into(); }
+                call("profile.import", p)?
+            }
         },
         Cmd::Rgb(RgbArgs { cmd }) => match cmd {
             RgbCmd::Fill { color } => call("rgb.fill", json!({"color": color.to_hex()}))?,
@@ -441,20 +548,28 @@ fn main() -> Result<()> {
                 }
                 v
             }
-            MapCmd::Set { assignments, layer, persist } => {
+            MapCmd::Set { assignments, layer } => {
                 let mut keys = serde_json::Map::new();
                 for a in assignments {
                     let (k, v) = a.split_once('=').with_context(|| format!("expected key=code, got {a:?}"))?;
                     keys.insert(k.to_string(), Value::String(v.to_string()));
                 }
-                let v = call("keymap.set", json!({"keys": keys, "layer": layer, "persist": persist}))?;
+                let v = call("keymap.set", json!({"keys": keys, "layer": layer}))?;
                 if !json {
                     print_mapping(&v);
                     return Ok(());
                 }
                 v
             }
-            MapCmd::Reset { layer, persist } => call("keymap.reset", json!({"layer": layer, "persist": persist}))?,
+            MapCmd::Preset { name, layer } => {
+                let v = call("keymap.set_layer", json!({"layer": layer, "preset": name}))?;
+                if !json {
+                    print_mapping(&v);
+                    return Ok(());
+                }
+                v
+            }
+            MapCmd::Reset { layer } => call("keymap.reset", json!({"layer": layer}))?,
             MapCmd::Codes => {
                 let v = call("keycodes.list", json!({}))?;
                 if !json {
@@ -469,18 +584,24 @@ fn main() -> Result<()> {
         Cmd::Akc(AkcArgs { cmd }) => {
             let v = match cmd {
                 AkcCmd::List { slot } => call("advanced_keys.get", json!({"slot": slot}))?,
-                AkcCmd::Modtap { key, hold, tap } => call("advanced_keys.set_mod_tap", json!({"key": key, "hold": hold, "tap": tap}))?,
+                AkcCmd::Modtap { key, hold, tap } => call("advanced_keys.set", json!({"key": key, "kind": "mod_tap", "hold": hold, "tap": tap}))?,
+                AkcCmd::Toggle { key, code } => call("advanced_keys.set", json!({"key": key, "kind": "toggle", "code": code}))?,
+                AkcCmd::Rappy { key, other } => call("advanced_keys.set", json!({"key": key, "kind": "rappy_snappy", "other_key": other}))?,
+                AkcCmd::Socd { key, other, mode } => call("advanced_keys.set", json!({"key": key, "kind": "socd", "other_key": other, "mode": mode}))?,
+                AkcCmd::Dks { key, codes } => call("advanced_keys.set", json!({"key": key, "kind": "dks", "codes": codes}))?,
                 AkcCmd::Remove { key } => call("advanced_keys.remove", json!({"key": key}))?,
             };
             if !json {
                 for e in v["entries"].as_array().into_iter().flatten() {
-                    println!(
-                        "{:<10} {:<8} hold={:<12} tap={}",
-                        e["key"].as_str().unwrap_or("?"),
-                        e["kind"].as_str().unwrap_or("?"),
-                        e["hold"].as_str().unwrap_or("-"),
-                        e["tap"].as_str().unwrap_or("-")
-                    );
+                    let detail = match e["kind"].as_str().unwrap_or("?") {
+                        "mod_tap" => format!("hold={} tap={}", e["hold"].as_str().unwrap_or("-"), e["tap"].as_str().unwrap_or("-")),
+                        "toggle" => format!("toggles {}", e["tap"].as_str().unwrap_or("-")),
+                        "rappy_snappy" => format!("with {}", e["other_key"].as_str().unwrap_or("-")),
+                        "socd" => format!("with {} mode {}", e["other_key"].as_str().unwrap_or("-"), e["mode"]),
+                        "dks" => format!("{}", e["dks_codes"]),
+                        _ => String::new(),
+                    };
+                    println!("{:<10} {:<13} {}", e["key"].as_str().unwrap_or("?"), e["kind"].as_str().unwrap_or("?"), detail);
                 }
                 return Ok(());
             }
@@ -488,24 +609,62 @@ fn main() -> Result<()> {
         }
         Cmd::Actuation(ActuationArgs { cmd }) => match cmd {
             ActuationCmd::Show { slot } => call("settings.get", json!({"slot": slot}))?,
-            ActuationCmd::Set { point, rapid_trigger, press, release, no_split, tachyon, persist } => {
-                let mut p = json!({"persist": persist});
+            ActuationCmd::Set { point, rapid_trigger, press, release, no_split, continuous, tachyon } => {
+                let mut p = json!({});
                 if let Some(v) = point { p["actuation_mm"] = v.into(); }
                 if let Some(v) = rapid_trigger { p["rapid_trigger"] = v.into(); }
                 if let Some(v) = press { p["rt_press_mm"] = v.into(); }
                 if let Some(v) = release { p["rt_release_mm"] = v.into(); }
                 if no_split { p["rt_release_mm"] = Value::Null; }
+                if let Some(v) = continuous { p["continuous_rt"] = v.into(); }
                 if let Some(v) = tachyon { p["tachyon"] = v.into(); }
                 call("settings.set", p)?
             }
+            ActuationCmd::Keys { assignments } => {
+                if assignments.is_empty() {
+                    call("actuation.keys.get", json!({}))?
+                } else {
+                    let mut keys = serde_json::Map::new();
+                    for a in assignments {
+                        let (k, v) = a.split_once('=').with_context(|| format!("expected key=mm, got {a:?}"))?;
+                        keys.insert(k.to_string(), if v == "-" { Value::Null } else { json!(v.parse::<f64>().context("mm must be a number")?) });
+                    }
+                    call("actuation.keys.set", json!({"keys": keys}))?
+                }
+            }
+            ActuationCmd::Rt { assignments } => {
+                if assignments.is_empty() {
+                    call("rapid_trigger.keys.get", json!({}))?
+                } else {
+                    let mut keys = serde_json::Map::new();
+                    for a in assignments {
+                        let (k, v) = a.split_once('=').with_context(|| format!("expected key=on|off, got {a:?}"))?;
+                        keys.insert(k.to_string(), Value::Bool(matches!(v, "on" | "true" | "1")));
+                    }
+                    call("rapid_trigger.keys.set", json!({"keys": keys}))?
+                }
+            }
         },
-        Cmd::Settings { dim, off } => {
-            if dim.is_none() && off.is_none() {
-                call("settings.global.get", json!({}))?
+        Cmd::Settings { dim, off, numlock_inverted, debounce, compat, gamepad, reset, confirm } => {
+            if reset {
+                call("settings.reset", json!({"confirm": confirm}))?
+            } else if compat.is_some() || gamepad.is_some() {
+                let mut p = json!({});
+                if let Some(c) = compat { p["compat_mode"] = c.into(); }
+                if let Some(g) = gamepad { p["gamepad_mode"] = g.into(); }
+                call("settings.device.set", p)?
+            } else if dim.is_none() && off.is_none() && numlock_inverted.is_none() && debounce.is_none() {
+                let mut g = call("settings.global.get", json!({}))?;
+                let d = call("settings.device.get", json!({}))?;
+                g["compat_mode"] = d["compat_mode"].clone();
+                g["gamepad_mode"] = d["gamepad_mode"].clone();
+                g
             } else {
                 let mut p = json!({});
                 if let Some(d) = dim { p["dim_after_minutes"] = d.into(); }
                 if let Some(o) = off { p["off_after_minutes"] = o.into(); }
+                if let Some(n) = numlock_inverted { p["numlock_inverted"] = n.into(); }
+                if let Some(b) = debounce { p["debounce_filter"] = b.into(); }
                 call("settings.global.set", p)?
             }
         }

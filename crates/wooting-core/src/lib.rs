@@ -4,6 +4,7 @@
 pub mod api;
 pub mod backup;
 pub mod client;
+pub mod draft;
 pub mod image_map;
 pub mod keyboard;
 pub mod theme;

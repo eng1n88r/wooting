@@ -91,6 +91,57 @@ impl Layout {
     }
 }
 
+/// Wootility's remap presets. `default` is the factory main layer; the
+/// others remap the letter/punctuation keys of a QWERTY board.
+pub const PRESETS: &[&str] = &["default", "function", "dvorak", "colemak", "workman", "abc"];
+
+pub fn preset_mapping(name: &str, layout: &Layout) -> Option<[[u8; crate::COLS]; crate::ROWS]> {
+    let mut rows = layout.default_mapping(0);
+    let assign = |rows: &mut [[u8; crate::COLS]; crate::ROWS], pairs: &[(&str, &str)]| {
+        for (id, code) in pairs {
+            if let (Some(key), Some(c)) = (layout.key(id), crate::keycode::parse(code)) {
+                for cell in &key.cells {
+                    rows[cell[0] as usize][cell[1] as usize] = c;
+                }
+            }
+        }
+    };
+    match name.to_ascii_lowercase().as_str() {
+        "default" => {}
+        // Function row on the number row (F1..F12 on 1..=), Esc stays.
+        "function" => assign(&mut rows, &[
+            ("1", "f1"), ("2", "f2"), ("3", "f3"), ("4", "f4"), ("5", "f5"), ("6", "f6"),
+            ("7", "f7"), ("8", "f8"), ("9", "f9"), ("0", "f10"), ("minus", "f11"), ("equal", "f12"),
+        ]),
+        "dvorak" => assign(&mut rows, &[
+            ("minus", "lbracket"), ("equal", "rbracket"),
+            ("q", "quote"), ("w", "comma"), ("e", "period"), ("r", "p"), ("t", "y"), ("y", "f"), ("u", "g"),
+            ("i", "c"), ("o", "r"), ("p", "l"), ("lbracket", "slash"), ("rbracket", "equal"),
+            ("a", "a"), ("s", "o"), ("d", "e"), ("f", "u"), ("g", "i"), ("h", "d"), ("j", "h"), ("k", "t"),
+            ("l", "n"), ("semicolon", "s"), ("quote", "minus"),
+            ("z", "semicolon"), ("x", "q"), ("c", "j"), ("v", "k"), ("b", "x"), ("n", "b"), ("m", "m"),
+            ("comma", "w"), ("period", "v"), ("slash", "z"),
+        ]),
+        "colemak" => assign(&mut rows, &[
+            ("e", "f"), ("r", "p"), ("t", "g"), ("y", "j"), ("u", "l"), ("i", "u"), ("o", "y"), ("p", "semicolon"),
+            ("s", "r"), ("d", "s"), ("f", "t"), ("g", "d"), ("j", "n"), ("k", "e"), ("l", "i"), ("semicolon", "o"),
+            ("n", "k"), ("capslock", "backspace"),
+        ]),
+        "workman" => assign(&mut rows, &[
+            ("w", "d"), ("e", "r"), ("r", "w"), ("t", "b"), ("y", "j"), ("u", "f"), ("i", "u"), ("o", "p"), ("p", "semicolon"),
+            ("d", "h"), ("f", "t"), ("g", "g"), ("h", "y"), ("j", "n"), ("k", "e"), ("l", "o"), ("semicolon", "i"),
+            ("c", "m"), ("v", "c"), ("b", "v"), ("n", "k"), ("m", "l"),
+        ]),
+        "abc" => assign(&mut rows, &[
+            ("q", "a"), ("w", "b"), ("e", "c"), ("r", "d"), ("t", "e"), ("y", "f"), ("u", "g"), ("i", "h"), ("o", "i"), ("p", "j"),
+            ("a", "k"), ("s", "l"), ("d", "m"), ("f", "n"), ("g", "o"), ("h", "p"), ("j", "q"), ("k", "r"), ("l", "s"),
+            ("z", "t"), ("x", "u"), ("c", "v"), ("v", "w"), ("b", "x"), ("n", "y"), ("m", "z"),
+        ]),
+        _ => return None,
+    }
+    Some(rows)
+}
+
 pub const DEFAULT_LAYER0_60HE: [[u8; 14]; 6] = [
     [0xff; 14],
     [0x26, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x2a, 0x2b, 0x27],

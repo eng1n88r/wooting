@@ -1,16 +1,24 @@
 //! The one operation set shared by the daemon's HTTP and socket servers,
 //! the MCP server and the CLI. Every surface ends up in [`Api::call`].
+//!
+//! Profile edits go through a per-slot [`Draft`]: the change is applied to
+//! the keyboard's RAM immediately and, when `persist` is true (the default
+//! for CLI/MCP/HTTP callers), also written to flash. The GUI passes
+//! `persist: false` and uses `profile.save` / `profile.discard` /
+//! `profile.undo` / `profile.redo` like Wootility's "Save to Keyboard".
 
 use crate::{
-    backup, image_map,
+    backup,
+    draft::{Draft, DraftStatus, ProfileData, Rows},
+    image_map,
     image_map::ImageOptions,
     theme, Error, Keyboard, Result,
 };
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{path::PathBuf, sync::Mutex};
-use wooting_proto::{keycode, pb, Command, Frame, Rgb, COLS, ROWS};
+use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+use wooting_proto::{keycode, pb, Command, Frame, Layout, Rgb, COLS, ROWS};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
@@ -25,25 +33,16 @@ impl From<Error> for ApiError {
             Error::Hid(wooting_hid::Error::NotFound) => -32001,
             _ => -32000,
         };
-        ApiError {
-            code,
-            message: e.to_string(),
-        }
+        ApiError { code, message: e.to_string() }
     }
 }
 
 impl ApiError {
     pub fn invalid(msg: impl Into<String>) -> ApiError {
-        ApiError {
-            code: -32602,
-            message: msg.into(),
-        }
+        ApiError { code: -32602, message: msg.into() }
     }
     pub fn method_not_found(name: &str) -> ApiError {
-        ApiError {
-            code: -32601,
-            message: format!("unknown method {name:?}"),
-        }
+        ApiError { code: -32601, message: format!("unknown method {name:?}") }
     }
 }
 
@@ -65,52 +64,69 @@ pub struct MethodInfo {
     pub params: Value,
 }
 
+const PERSIST_DOC: &str = "persist (default true): also write flash. With false the change is live in RAM only and tracked in the profile draft (see profile.save).";
+
 pub fn methods() -> Vec<MethodInfo> {
     let color = json!({"type": "string", "description": "Colour as #rrggbb"});
+    let slot = json!({"type": "integer", "minimum": 0, "description": "Profile slot; default = active profile"});
+    let persist = json!({"type": "boolean", "description": PERSIST_DOC});
+    let layer = json!({"type": "integer", "minimum": 0, "maximum": 3, "description": "0 = main, 1-3 = Fn layers"});
     let obj = |props: Value, required: &[&str]| {
         json!({"type": "object", "properties": props, "required": required, "additionalProperties": false})
     };
     vec![
-        MethodInfo { name: "device.info", description: "Model, serial, firmware, active profile and whether direct RGB mode is on.", params: obj(json!({}), &[]) },
-        MethodInfo { name: "device.keys", description: "List key ids that can be used with rgb.set_key / rgb.set_keys, with labels and positions.", params: obj(json!({}), &[]) },
-        MethodInfo { name: "profile.list", description: "List keyboard profiles (slot, name, colour, active).", params: obj(json!({}), &[]) },
-        MethodInfo { name: "profile.activate", description: "Switch the keyboard to profile slot N (0-based).", params: obj(json!({"slot": {"type": "integer", "minimum": 0}}), &["slot"]) },
-        MethodInfo { name: "rgb.fill", description: "Light every key with one colour (volatile direct mode).", params: obj(json!({"color": color}), &["color"]) },
-        MethodInfo { name: "rgb.set_key", description: "Set one key's colour by id (volatile direct mode).", params: obj(json!({"key": {"type": "string"}, "color": color}), &["key", "color"]) },
-        MethodInfo { name: "rgb.set_keys", description: "Set many keys at once: {\"colors\": {\"esc\": \"#ff0000\", \"space\": \"#00ff00\"}}.", params: obj(json!({"colors": {"type": "object", "additionalProperties": color}}), &["colors"]) },
-        MethodInfo { name: "rgb.set_frame", description: "Set the whole LED matrix: rows is 6 rows of up to 21 colours (#rrggbb or null).", params: obj(json!({"rows": {"type": "array", "items": {"type": "array", "items": {"type": ["string", "null"]}}}}), &["rows"]) },
-        MethodInfo { name: "rgb.get_frame", description: "Current direct-mode frame as 6 rows of #rrggbb.", params: obj(json!({}), &[]) },
-        MethodInfo { name: "rgb.from_image", description: "Paint the keyboard with an image (file path or base64 data). mode: cover|fit|stretch, gamma default 0.8.", params: obj(json!({"path": {"type": "string"}, "data_base64": {"type": "string"}, "mode": {"type": "string", "enum": ["cover", "fit", "stretch"]}, "gamma": {"type": "number"}, "brightness": {"type": "number"}}), &[]) },
-        MethodInfo { name: "rgb.release", description: "Leave direct mode and return control of the LEDs to the keyboard's own lighting.", params: obj(json!({}), &[]) },
-        MethodInfo { name: "rgb.brightness.get", description: "Brightness (0-255) stored in an RGB profile slot.", params: obj(json!({"slot": {"type": "integer", "minimum": 0, "description": "RGB profile slot; default = active profile"}}), &[]) },
-        MethodInfo { name: "rgb.brightness.set", description: "Set stored RGB profile brightness (0-255). Writes flash.", params: obj(json!({"value": {"type": "integer", "minimum": 0, "maximum": 255}, "slot": {"type": "integer", "minimum": 0}}), &["value"]) },
-        MethodInfo { name: "rgb.profile.get", description: "Colours stored in an RGB profile slot (default: active profile).", params: obj(json!({"slot": {"type": "integer", "minimum": 0, "description": "RGB profile slot; default = active profile"}}), &[]) },
-        MethodInfo { name: "rgb.profile.set", description: "Write colours (6 rows of #rrggbb) and optionally brightness straight into an RGB profile slot (default: active). Writes flash.", params: obj(json!({"rows": {"type": "array", "items": {"type": "array", "items": {"type": ["string", "null"]}}}, "brightness": {"type": "integer"}, "slot": {"type": "integer"}}), &["rows"]) },
-        MethodInfo { name: "rgb.save", description: "Persist the current direct-mode frame into an RGB profile slot (default: active profile) so it survives unplugging. Writes flash.", params: obj(json!({"slot": {"type": "integer", "minimum": 0, "description": "RGB profile slot; default = active profile"}}), &[]) },
-        MethodInfo { name: "theme.apply", description: "Colour the keyboard from an Omarchy theme directory (default: the current theme). persist=true also saves it to the keyboard.", params: obj(json!({"dir": {"type": "string"}, "persist": {"type": "boolean"}}), &[]) },
-        MethodInfo { name: "settings.get", description: "Actuation point, rapid trigger and Tachyon settings stored in a profile slot (default: active).", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
-        MethodInfo { name: "settings.set", description: "Change actuation (mm, 0.1-4.0), rapid trigger (on/off, press/release sensitivity in mm) and Tachyon for all keys. Applies live; persist=true also writes the active profile to flash.", params: obj(json!({"actuation_mm": {"type": "number"}, "rapid_trigger": {"type": "boolean"}, "rt_press_mm": {"type": "number"}, "rt_release_mm": {"type": ["number", "null"], "description": "null = same as press"}, "tachyon": {"type": "boolean"}, "persist": {"type": "boolean"}}), &[]) },
-        MethodInfo { name: "actuation.keys.get", description: "Per-key actuation overrides of a profile slot (default: active) as {key_id: mm}.", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
-        MethodInfo { name: "actuation.keys.set", description: "Set per-key actuation overrides: {\"keys\": {\"a\": 2.5, \"s\": null}} (null removes the override). persist=true writes flash.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": ["number", "null"]}}, "persist": {"type": "boolean"}}), &["keys"]) },
-        MethodInfo { name: "rapid_trigger.keys.get", description: "Keys with rapid trigger enabled individually in a profile slot (default: active).", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
-        MethodInfo { name: "rapid_trigger.keys.set", description: "Enable/disable rapid trigger per key: {\"keys\": {\"w\": true, \"a\": false}}. persist=true writes flash.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": "boolean"}}, "persist": {"type": "boolean"}}), &["keys"]) },
-        MethodInfo { name: "rgb.effects.get", description: "Effect layers and brightness of an RGB profile slot (default: active). Layer kinds: wave, scan, breath, cycle, ripple, trail, touch, jelly, aoe, mixing, rt_display, noise, spiral; empty = static.", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
-        MethodInfo { name: "rgb.effects.set", description: "Replace the effect layers, e.g. {\"layers\": [{\"wave\": {\"look\": 0, \"speed\": 16, \"direction\": 0}}]} ([] = static). persist=true writes flash.", params: obj(json!({"layers": {"type": "array"}, "brightness": {"type": "integer"}, "persist": {"type": "boolean"}}), &["layers"]) },
-        MethodInfo { name: "settings.device.get", description: "Device-wide hardware flags: compatibility mode (6KRO) and gamepad mode.", params: obj(json!({}), &[]) },
-        MethodInfo { name: "settings.device.set", description: "Set compatibility mode (6KRO) or gamepad mode. The keyboard restarts; gamepad mode changes its USB identity.", params: obj(json!({"compat_mode": {"type": "boolean"}, "gamepad_mode": {"type": "boolean"}}), &[]) },
-        MethodInfo { name: "settings.global.get", description: "Global settings (RGB power saving timers).", params: obj(json!({}), &[]) },
-        MethodInfo { name: "settings.global.set", description: "Device-wide settings: RGB power saving minutes (0 = never), inverted Num Lock indicator, debounce filter.", params: obj(json!({"dim_after_minutes": {"type": "integer"}, "off_after_minutes": {"type": "integer"}, "numlock_inverted": {"type": "boolean"}, "debounce_filter": {"type": "boolean"}}), &[]) },
-        MethodInfo { name: "keymap.get", description: "Key mapping of a layer (0 = main, 1/2 = Fn layers) as {key_id: code_name} plus the raw matrix. slot defaults to the active profile.", params: obj(json!({"layer": {"type": "integer", "minimum": 0, "maximum": 3}, "slot": {"type": "integer"}}), &[]) },
-        MethodInfo { name: "keymap.set_key", description: "Remap one key: code is a key name from keycodes.list (e.g. \"esc\", \"f5\", \"lctrl\", \"none\"). Applies live to the active profile; persist=true also writes flash.", params: obj(json!({"key": {"type": "string"}, "code": {"type": "string"}, "layer": {"type": "integer", "minimum": 0, "maximum": 3}, "persist": {"type": "boolean"}}), &["key", "code"]) },
-        MethodInfo { name: "keymap.set", description: "Remap several keys at once: {\"keys\": {\"capslock\": \"esc\", \"esc\": \"grave\"}}.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": "string"}}, "layer": {"type": "integer"}, "persist": {"type": "boolean"}}), &["keys"]) },
-        MethodInfo { name: "keymap.reset", description: "Restore the factory mapping of a layer.", params: obj(json!({"layer": {"type": "integer"}, "persist": {"type": "boolean"}}), &[]) },
-        MethodInfo { name: "keycodes.list", description: "All key code names accepted by keymap.set_key.", params: obj(json!({}), &[]) },
-        MethodInfo { name: "advanced_keys.get", description: "Advanced keys (mod-tap) of a profile slot (default: active): key id, hold action, tap action.", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
-        MethodInfo { name: "advanced_keys.set_mod_tap", description: "Make a key a mod-tap: 'hold' is sent while held, 'tap' when tapped (key code names). Written to the active profile.", params: obj(json!({"key": {"type": "string"}, "hold": {"type": "string"}, "tap": {"type": "string"}}), &["key", "hold", "tap"]) },
-        MethodInfo { name: "advanced_keys.set", description: "Add or replace an advanced key. kind=mod_tap {tap,hold} | toggle {code} | rappy_snappy {other_key} | socd {other_key, mode} | dks {codes:[4 names], masks:[4 ints]?}. Written to the active profile.", params: obj(json!({"key": {"type": "string"}, "kind": {"type": "string", "enum": ["mod_tap", "toggle", "rappy_snappy", "socd", "dks"]}, "tap": {"type": "string"}, "hold": {"type": "string"}, "code": {"type": "string"}, "other_key": {"type": "string"}, "mode": {"type": "integer"}, "codes": {"type": "array", "items": {"type": "string"}}, "masks": {"type": "array", "items": {"type": "integer"}}}), &["key", "kind"]) },
-        MethodInfo { name: "advanced_keys.remove", description: "Remove the advanced-key entry from a key.", params: obj(json!({"key": {"type": "string"}}), &["key"]) },
-        MethodInfo { name: "profile.rename", description: "Rename a profile slot and/or set its badge colour.", params: obj(json!({"slot": {"type": "integer"}, "name": {"type": "string"}, "color": color}), &["slot"]) },
+        MethodInfo { name: "device.info", description: "Model, serial, firmware, active profile, direct-RGB state and the active profile's draft status (dirty/undo/redo).", params: obj(json!({}), &[]) },
+        MethodInfo { name: "device.keys", description: "List key ids (for rgb.set_keys, keymap.*, actuation.keys.*) with labels and positions.", params: obj(json!({}), &[]) },
+        MethodInfo { name: "device.analog", description: "Current analog travel (0-255) of every key; useful to see what is pressed.", params: obj(json!({}), &[]) },
+        MethodInfo { name: "profile.list", description: "List keyboard profiles (slot, name, colour, active, dirty).", params: obj(json!({}), &[]) },
+        MethodInfo { name: "profile.activate", description: "Switch the keyboard to profile slot N (0-based). Fails if the current profile has unsaved draft edits unless discard=true or save=true.", params: obj(json!({"slot": {"type": "integer", "minimum": 0}, "discard": {"type": "boolean"}, "save": {"type": "boolean"}}), &["slot"]) },
+        MethodInfo { name: "profile.rename", description: "Rename a profile slot and/or set its badge colour.", params: obj(json!({"slot": slot, "name": {"type": "string"}, "color": color, "persist": persist}), &[]) },
         MethodInfo { name: "profile.delete", description: "Delete an onboard profile slot. Irreversible; needs confirm=true.", params: obj(json!({"slot": {"type": "integer"}, "confirm": {"type": "boolean"}}), &["slot"]) },
+        MethodInfo { name: "profile.create", description: "Create a new onboard profile in the first free slot (max 4) as a copy of another slot (default: factory-like copy of slot 0) with a new name. Writes flash.", params: obj(json!({"name": {"type": "string"}, "color": color, "from_slot": {"type": "integer"}}), &["name"]) },
+        MethodInfo { name: "profile.swap", description: "Swap two profile slots (Wootility's 'Set as Default' moves a profile into slot 0 this way). Writes flash.", params: obj(json!({"a": {"type": "integer"}, "b": {"type": "integer"}}), &["a", "b"]) },
+        MethodInfo { name: "profile.export", description: "Full profile data of a slot as JSON (for backups / profile.import).", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "profile.import", description: "Write exported profile data into a slot. Writes flash.", params: obj(json!({"slot": {"type": "integer"}, "data": {"type": "object"}, "name": {"type": "string"}}), &["slot", "data"]) },
+        MethodInfo { name: "profile.status", description: "Draft status of a slot: dirty, can_undo, can_redo.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "profile.save", description: "Write the slot's draft (pending live edits) to flash.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "profile.discard", description: "Drop pending edits and reload the slot from flash.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "profile.undo", description: "Undo the last draft edit (live).", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "profile.redo", description: "Redo the last undone draft edit (live).", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "rgb.fill", description: "Light every key with one colour (volatile direct mode; the keyboard's own lighting resumes after rgb.release).", params: obj(json!({"color": color}), &["color"]) },
+        MethodInfo { name: "rgb.set_key", description: "Set one key's colour by id (volatile direct mode).", params: obj(json!({"key": {"type": "string"}, "color": color}), &["key", "color"]) },
+        MethodInfo { name: "rgb.set_keys", description: "Set many keys at once: {\"colors\": {\"esc\": \"#ff0000\", \"space\": \"#00ff00\"}} (volatile direct mode).", params: obj(json!({"colors": {"type": "object", "additionalProperties": color}}), &["colors"]) },
+        MethodInfo { name: "rgb.set_frame", description: "Set the whole LED matrix: rows is 6 rows of up to 21 colours (#rrggbb or null) (volatile direct mode).", params: obj(json!({"rows": {"type": "array", "items": {"type": "array", "items": {"type": ["string", "null"]}}}}), &["rows"]) },
+        MethodInfo { name: "rgb.get_frame", description: "Current direct-mode frame as 6 rows of #rrggbb.", params: obj(json!({}), &[]) },
+        MethodInfo { name: "rgb.from_image", description: "Paint the keyboard with an image (file path or base64 data). mode: cover|fit|stretch, gamma default 0.8. Volatile unless rgb.save follows.", params: obj(json!({"path": {"type": "string"}, "data_base64": {"type": "string"}, "mode": {"type": "string", "enum": ["cover", "fit", "stretch"]}, "gamma": {"type": "number"}, "brightness": {"type": "number"}}), &[]) },
+        MethodInfo { name: "rgb.release", description: "Leave direct mode and return control of the LEDs to the keyboard's own lighting.", params: obj(json!({}), &[]) },
+        MethodInfo { name: "rgb.save", description: "Store the current direct-mode frame as the static colours of a profile slot (default: active). Writes flash.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "rgb.profile.get", description: "Static colours stored in a profile slot (default: active), 6 rows of #rrggbb.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "rgb.profile.set", description: "Set stored static colours: whole rows (6 x 21 #rrggbb) and/or per key {\"colors\": {\"esc\": \"#ff0000\"}}, plus brightness.", params: obj(json!({"rows": {"type": "array"}, "colors": {"type": "object", "additionalProperties": color}, "brightness": {"type": "integer"}, "slot": slot, "persist": persist}), &[]) },
+        MethodInfo { name: "rgb.brightness.get", description: "Stored brightness (0-255) of a profile slot.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "rgb.brightness.set", description: "Set stored brightness (0-255).", params: obj(json!({"value": {"type": "integer", "minimum": 0, "maximum": 255}, "slot": slot, "persist": persist}), &["value"]) },
+        MethodInfo { name: "rgb.effects.get", description: "Effect layers of a profile slot. Layer kinds: wave, scan, breath, cycle, ripple, trail, touch, jelly, aoe, mixing, rt_display, noise, spiral; [] = static.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "rgb.effects.set", description: "Replace the effect layers, e.g. {\"layers\": [{\"wave\": {\"look\": 0, \"speed\": 16, \"direction\": 0}}]} ([] = static). The first layer is the base effect.", params: obj(json!({"layers": {"type": "array"}, "slot": slot, "persist": persist}), &["layers"]) },
+        MethodInfo { name: "theme.apply", description: "Colour the keyboard from an Omarchy theme directory (default: the current theme) in direct mode; persist=true also stores it as the active profile's static colours.", params: obj(json!({"dir": {"type": "string"}, "persist": {"type": "boolean"}}), &[]) },
+        MethodInfo { name: "settings.get", description: "Actuation point, rapid trigger (incl. continuous), Tachyon of a profile slot.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "settings.set", description: "Change actuation (mm, 0.1-4.0), rapid trigger (on/off for all keys, press/release sensitivity in mm, continuous_rt) and Tachyon.", params: obj(json!({"actuation_mm": {"type": "number"}, "rapid_trigger": {"type": "boolean"}, "rt_press_mm": {"type": "number"}, "rt_release_mm": {"type": ["number", "null"], "description": "null = same as press"}, "continuous_rt": {"type": "boolean"}, "tachyon": {"type": "boolean"}, "slot": slot, "persist": persist}), &[]) },
+        MethodInfo { name: "actuation.keys.get", description: "Per-key actuation overrides as {key_id: mm}.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "actuation.keys.set", description: "Set per-key actuation overrides: {\"keys\": {\"a\": 2.5, \"s\": null}} (null removes the override).", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": ["number", "null"]}}, "slot": slot, "persist": persist}), &["keys"]) },
+        MethodInfo { name: "rapid_trigger.keys.get", description: "Keys with rapid trigger enabled individually.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "rapid_trigger.keys.set", description: "Enable/disable rapid trigger per key: {\"keys\": {\"w\": true, \"a\": false}}.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": "boolean"}}, "slot": slot, "persist": persist}), &["keys"]) },
+        MethodInfo { name: "settings.global.get", description: "Device-wide settings: RGB power saving timers, inverted Num Lock indicator, debounce filter.", params: obj(json!({}), &[]) },
+        MethodInfo { name: "settings.global.set", description: "Set device-wide settings: minutes until lighting dims / turns off (0 = never), numlock_inverted, debounce_filter.", params: obj(json!({"dim_after_minutes": {"type": "integer"}, "off_after_minutes": {"type": "integer"}, "numlock_inverted": {"type": "boolean"}, "debounce_filter": {"type": "boolean"}}), &[]) },
+        MethodInfo { name: "settings.device.get", description: "Hardware flags: compatibility mode (6KRO) and gamepad mode.", params: obj(json!({}), &[]) },
+        MethodInfo { name: "settings.device.set", description: "Set compatibility mode (6KRO) or gamepad mode. The keyboard restarts; gamepad mode changes its USB identity.", params: obj(json!({"compat_mode": {"type": "boolean"}, "gamepad_mode": {"type": "boolean"}}), &[]) },
+        MethodInfo { name: "settings.reset", description: "Reset ALL keyboard settings to factory (ResetSettings). Irreversible; needs confirm=true.", params: obj(json!({"confirm": {"type": "boolean"}}), &[]) },
+        MethodInfo { name: "keymap.get", description: "Key mapping of a layer as {key_id: {code, name, label}} plus the raw matrix; stored=false means the factory default is in use.", params: obj(json!({"layer": layer, "slot": slot}), &[]) },
+        MethodInfo { name: "keymap.set_key", description: "Remap one key: code is a key name from keycodes.list (e.g. \"esc\", \"f5\", \"lctrl\", \"mouse_left\", \"none\").", params: obj(json!({"key": {"type": "string"}, "code": {"type": "string"}, "layer": layer, "slot": slot, "persist": persist}), &["key", "code"]) },
+        MethodInfo { name: "keymap.set", description: "Remap several keys at once: {\"keys\": {\"capslock\": \"esc\", \"esc\": \"grave\"}}.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": "string"}}, "layer": layer, "slot": slot, "persist": persist}), &["keys"]) },
+        MethodInfo { name: "keymap.set_layer", description: "Replace a whole layer with rows (6 x 21 codes or names) or a preset: default|function|dvorak|colemak|workman|1337|abc, or null to make the layer follow the factory default.", params: obj(json!({"layer": layer, "rows": {"type": ["array", "null"]}, "preset": {"type": "string"}, "slot": slot, "persist": persist}), &["layer"]) },
+        MethodInfo { name: "keymap.reset", description: "Restore the factory mapping of a layer.", params: obj(json!({"layer": layer, "slot": slot, "persist": persist}), &[]) },
+        MethodInfo { name: "keycodes.list", description: "All key code names accepted by keymap.* and advanced_keys.*.", params: obj(json!({}), &[]) },
+        MethodInfo { name: "advanced_keys.get", description: "Advanced keys of a profile slot: mod_tap {tap,hold}, toggle {tap=code}, rappy_snappy {other_key}, socd {other_key,mode}, dks {dks_codes,dks_masks}.", params: obj(json!({"slot": slot}), &[]) },
+        MethodInfo { name: "advanced_keys.set", description: "Add or replace an advanced key. kind=mod_tap {tap,hold} | toggle {code} | rappy_snappy {other_key} | socd {other_key, mode} | dks {codes:[4 names], masks:[4 ints]?}.", params: obj(json!({"key": {"type": "string"}, "kind": {"type": "string", "enum": ["mod_tap", "toggle", "rappy_snappy", "socd", "dks"]}, "tap": {"type": "string"}, "hold": {"type": "string"}, "code": {"type": "string"}, "other_key": {"type": "string"}, "mode": {"type": "integer"}, "codes": {"type": "array", "items": {"type": "string"}}, "masks": {"type": "array", "items": {"type": "integer"}}, "slot": slot, "persist": persist}), &["key", "kind"]) },
+        MethodInfo { name: "advanced_keys.set_mod_tap", description: "Shortcut for advanced_keys.set kind=mod_tap.", params: obj(json!({"key": {"type": "string"}, "hold": {"type": "string"}, "tap": {"type": "string"}, "slot": slot, "persist": persist}), &["key", "hold", "tap"]) },
+        MethodInfo { name: "advanced_keys.remove", description: "Remove the advanced-key entry from a key.", params: obj(json!({"key": {"type": "string"}, "slot": slot, "persist": persist}), &["key"]) },
         MethodInfo { name: "backup.create", description: "Dump every readable profile/setting to a JSON file and return its path.", params: obj(json!({}), &[]) },
         MethodInfo { name: "raw.command", description: "Send a raw feature command by name or id with up to 4 byte params. Dangerous commands need confirm=true.", params: obj(json!({"command": {"type": "string"}, "params": {"type": "array", "items": {"type": "integer"}, "maxItems": 4}, "confirm": {"type": "boolean"}}), &["command"]) },
     ]
@@ -120,14 +136,12 @@ pub fn methods() -> Vec<MethodInfo> {
 pub struct Api {
     selector: Option<String>,
     kb: Mutex<Option<Keyboard>>,
+    drafts: Mutex<HashMap<u8, Draft>>,
 }
 
 impl Api {
     pub fn new(selector: Option<String>) -> Api {
-        Api {
-            selector,
-            kb: Mutex::new(None),
-        }
+        Api { selector, kb: Mutex::new(None), drafts: Mutex::new(HashMap::new()) }
     }
 
     /// Run `f` against the keyboard, (re)opening it on demand. A HID error
@@ -153,12 +167,75 @@ impl Api {
         }
     }
 
+    /// Current state of a slot: its draft if one exists, otherwise flash.
+    fn view(&self, slot: Option<u8>) -> Result<(u8, ProfileData, Layout, DraftStatus)> {
+        self.with_keyboard(|kb| {
+            let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
+            let mut drafts = self.drafts.lock().unwrap_or_else(|p| p.into_inner());
+            let d = match drafts.get(&slot) {
+                Some(d) => d,
+                None => {
+                    let d = Draft::load(kb, slot)?;
+                    drafts.entry(slot).or_insert(d)
+                }
+            };
+            Ok((slot, d.data.clone(), kb.layout().clone(), d.status()))
+        })
+    }
+
+    /// Apply an edit to a slot's draft (live) and, with `persist`, save it.
+    fn mutate(
+        &self,
+        slot: Option<u8>,
+        persist: bool,
+        f: impl FnOnce(&mut ProfileData, &Layout) -> Result<()>,
+    ) -> Result<(u8, ProfileData, Layout, DraftStatus)> {
+        self.with_keyboard(|kb| {
+            let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
+            let layout = kb.layout().clone();
+            let mut drafts = self.drafts.lock().unwrap_or_else(|p| p.into_inner());
+            if !drafts.contains_key(&slot) {
+                drafts.insert(slot, Draft::load(kb, slot)?);
+            }
+            let d = drafts.get_mut(&slot).expect("inserted");
+            d.edit(kb, |data| f(data, &layout))?;
+            if persist {
+                d.save(kb)?;
+            }
+            Ok((slot, d.data.clone(), layout, d.status()))
+        })
+    }
+
+    fn draft_op(&self, slot: Option<u8>, op: fn(&mut Draft, &Keyboard) -> Result<bool>) -> Result<(u8, bool, DraftStatus)> {
+        self.with_keyboard(|kb| {
+            let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
+            let mut drafts = self.drafts.lock().unwrap_or_else(|p| p.into_inner());
+            if !drafts.contains_key(&slot) {
+                drafts.insert(slot, Draft::load(kb, slot)?);
+            }
+            let d = drafts.get_mut(&slot).expect("inserted");
+            let changed = op(d, kb)?;
+            Ok((slot, changed, d.status()))
+        })
+    }
+
+    fn forget_draft(&self, slot: u8) {
+        self.drafts.lock().unwrap_or_else(|p| p.into_inner()).remove(&slot);
+    }
+
     pub fn call(&self, method: &str, params: Value) -> ApiResult {
         let p = Params(params);
+        let persist = p.bool("persist").unwrap_or(true);
+        let slot = p.opt_u8("slot")?;
         match method {
+            // ----- device ---------------------------------------------------
             "device.info" => self.with_keyboard(|kb| {
                 let mut s = serde_json::to_value(kb.summary()).unwrap();
-                s["active_profile"] = kb.active_profile().ok().into();
+                let active = kb.active_profile().ok();
+                s["active_profile"] = active.into();
+                let drafts = self.drafts.lock().unwrap_or_else(|p| p.into_inner());
+                s["draft"] = active.and_then(|a| drafts.get(&a)).map(|d| serde_json::to_value(d.status()).unwrap()).unwrap_or(Value::Null);
+                s["dirty_slots"] = drafts.values().filter(|d| d.status().dirty).map(|d| d.slot).collect::<Vec<_>>().into();
                 Ok(s)
             }).map_err(Into::into),
             "device.keys" => self.with_keyboard(|kb| Ok(json!({
@@ -167,14 +244,146 @@ impl Api {
                     "id": k.id, "label": k.label, "x": k.x, "y": k.y, "w": k.w, "h": k.h, "cells": k.cells,
                 })).collect::<Vec<_>>(),
             }))).map_err(Into::into),
-            "profile.list" => self.with_keyboard(|kb| Ok(serde_json::to_value(kb.profiles()?).unwrap())).map_err(Into::into),
+            "device.analog" => self.with_keyboard(|kb| {
+                let v = kb.analog_values()?;
+                let mut keys = serde_json::Map::new();
+                for key in &kb.layout().keys {
+                    let c = key.cells[0];
+                    let val = v.rows.get(c[0] as usize).and_then(|r| r.values.get(c[1] as usize)).copied().unwrap_or(0);
+                    if val > 0 {
+                        keys.insert(key.id.clone(), json!(val));
+                    }
+                }
+                Ok(json!({"pressed": keys, "rows": v.rows.iter().map(|r| r.values.clone()).collect::<Vec<_>>()}))
+            }).map_err(Into::into),
+            // ----- profiles -------------------------------------------------
+            "profile.list" => self.with_keyboard(|kb| {
+                let mut list = kb.profiles()?;
+                let drafts = self.drafts.lock().unwrap_or_else(|p| p.into_inner());
+                let out: Vec<Value> = list.iter_mut().map(|p| {
+                    let mut v = serde_json::to_value(&p).unwrap();
+                    if let Some(d) = drafts.get(&p.slot) {
+                        v["name"] = d.data.meta.name.clone().into();
+                        v["dirty"] = d.status().dirty.into();
+                    } else {
+                        v["dirty"] = false.into();
+                    }
+                    v
+                }).collect();
+                Ok(Value::Array(out))
+            }).map_err(Into::into),
             "profile.activate" => {
-                let slot = p.u8("slot")?;
+                let target = p.u8("slot")?;
+                let discard = p.bool("discard").unwrap_or(false);
+                let save = p.bool("save").unwrap_or(false);
                 self.with_keyboard(|kb| {
-                    kb.activate_profile(slot)?;
-                    Ok(json!({"active_profile": slot}))
+                    let current = kb.active_profile()?;
+                    let mut drafts = self.drafts.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Some(d) = drafts.get_mut(&current) {
+                        if d.status().dirty {
+                            if save {
+                                d.save(kb)?;
+                            } else if discard {
+                                d.discard(kb)?;
+                            } else {
+                                return Err(Error::Other(format!("profile {current} has unsaved edits; pass save=true or discard=true")));
+                            }
+                        }
+                    }
+                    kb.activate_profile(target)?;
+                    Ok(json!({"active_profile": target}))
                 }).map_err(Into::into)
             }
+            "profile.rename" => {
+                let name = p.opt_string("name");
+                let color = p.opt_color("color")?;
+                let (slot, data, _, st) = self.mutate(slot, persist, |d, _| { d.rename(name.as_deref(), color); Ok(()) })?;
+                Ok(json!({"slot": slot, "name": data.meta.name, "draft": st}))
+            }
+            "profile.delete" => {
+                let slot = p.u8("slot")?;
+                if !p.bool("confirm").unwrap_or(false) {
+                    return Err(ApiError::invalid("deleting a profile is irreversible; pass confirm=true"));
+                }
+                self.forget_draft(slot);
+                self.with_keyboard(|kb| { kb.delete_profile(slot)?; Ok(json!({"deleted": slot})) }).map_err(Into::into)
+            }
+            "profile.create" => {
+                let name = p.string("name")?;
+                let color = p.opt_color("color")?;
+                let from = p.opt_u8("from_slot")?.unwrap_or(0);
+                self.with_keyboard(|kb| {
+                    let count = kb.profiles()?.len() as u8;
+                    if count >= 4 {
+                        return Err(Error::Other("all 4 onboard slots are in use".into()));
+                    }
+                    let mut data = kb.read_profile(from)?;
+                    data.rename(Some(&name), color);
+                    kb.create_profile(count, &data)?;
+                    Ok(json!({"slot": count, "name": name}))
+                }).map_err(Into::into)
+            }
+            "profile.swap" => {
+                let a = p.u8("a")?;
+                let b = p.u8("b")?;
+                self.forget_draft(a);
+                self.forget_draft(b);
+                self.with_keyboard(|kb| {
+                    let da = kb.read_profile(a)?;
+                    let db = kb.read_profile(b)?;
+                    kb.write_profile(&db, crate::draft::WriteTarget::Flash(a))?;
+                    kb.write_profile(&da, crate::draft::WriteTarget::Flash(b))?;
+                    let active = kb.active_profile()?;
+                    if active == a || active == b {
+                        kb.cmd(Command::ReloadProfile, [0, 0, 0, active])?;
+                    }
+                    Ok(json!({"swapped": [a, b]}))
+                }).map_err(Into::into)
+            }
+            "profile.export" => {
+                let (slot, data, _, _) = self.view(slot)?;
+                Ok(json!({"slot": slot, "format": "wooting-profile-v1", "data": data}))
+            }
+            "profile.import" => {
+                let slot = p.u8("slot")?;
+                let mut data: ProfileData = serde_json::from_value(p.0.get("data").cloned().unwrap_or(Value::Null)).map_err(|e| ApiError::invalid(format!("data: {e}")))?;
+                if let Some(n) = p.opt_string("name") {
+                    data.meta.name = n;
+                }
+                self.forget_draft(slot);
+                self.with_keyboard(|kb| {
+                    if kb.profile_metadata(slot)?.is_none() {
+                        kb.create_profile(slot, &data)?;
+                    } else {
+                        kb.write_profile(&data, crate::draft::WriteTarget::Flash(slot))?;
+                        if kb.active_profile()? == slot {
+                            kb.cmd(Command::ReloadProfile, [0, 0, 0, slot])?;
+                        }
+                    }
+                    Ok(json!({"slot": slot, "name": data.meta.name}))
+                }).map_err(Into::into)
+            }
+            "profile.status" => {
+                let (slot, _, _, st) = self.view(slot)?;
+                Ok(json!({"slot": slot, "draft": st}))
+            }
+            "profile.save" => {
+                let (slot, _, st) = self.draft_op(slot, |d, kb| { d.save(kb)?; Ok(true) })?;
+                Ok(json!({"slot": slot, "draft": st}))
+            }
+            "profile.discard" => {
+                let (slot, _, st) = self.draft_op(slot, |d, kb| { d.discard(kb)?; Ok(true) })?;
+                Ok(json!({"slot": slot, "draft": st}))
+            }
+            "profile.undo" => {
+                let (slot, changed, st) = self.draft_op(slot, |d, kb| d.undo(kb))?;
+                Ok(json!({"slot": slot, "undone": changed, "draft": st}))
+            }
+            "profile.redo" => {
+                let (slot, changed, st) = self.draft_op(slot, |d, kb| d.redo(kb))?;
+                Ok(json!({"slot": slot, "redone": changed, "draft": st}))
+            }
+            // ----- direct (volatile) lighting ------------------------------
             "rgb.fill" => {
                 let c = p.color("color")?;
                 self.with_keyboard(|kb| { kb.fill(c)?; Ok(json!({"ok": true})) }).map_err(Into::into)
@@ -185,24 +394,11 @@ impl Api {
                 self.with_keyboard(|kb| { kb.set_key(&key, c)?; Ok(json!({"ok": true})) }).map_err(Into::into)
             }
             "rgb.set_keys" => {
-                let map = p.0.get("colors").and_then(Value::as_object).ok_or_else(|| ApiError::invalid("colors must be an object"))?;
-                let mut pairs = Vec::new();
-                for (k, v) in map {
-                    let s = v.as_str().ok_or_else(|| ApiError::invalid(format!("colour for {k} must be a string")))?;
-                    pairs.push((k.clone(), Rgb::parse_hex(s).ok_or_else(|| ApiError::invalid(format!("bad colour {s:?}")))?));
-                }
+                let pairs = p.color_map("colors")?;
                 self.with_keyboard(|kb| { kb.set_keys(&pairs)?; Ok(json!({"ok": true, "keys": pairs.len()})) }).map_err(Into::into)
             }
             "rgb.set_frame" => {
-                let rows = p.0.get("rows").and_then(Value::as_array).ok_or_else(|| ApiError::invalid("rows must be an array"))?;
-                let mut frame = Frame::default();
-                for (r, row) in rows.iter().take(ROWS).enumerate() {
-                    for (c, v) in row.as_array().into_iter().flatten().take(COLS).enumerate() {
-                        if let Some(s) = v.as_str() {
-                            frame.set(r, c, Rgb::parse_hex(s).ok_or_else(|| ApiError::invalid(format!("bad colour {s:?}")))?);
-                        }
-                    }
-                }
+                let frame = p.frame("rows")?;
                 self.with_keyboard(|kb| { kb.set_frame(frame)?; Ok(json!({"ok": true})) }).map_err(Into::into)
             }
             "rgb.get_frame" => self.with_keyboard(|kb| Ok(frame_json(kb.frame()))).map_err(Into::into),
@@ -228,90 +424,82 @@ impl Api {
                 }).map_err(Into::into)
             }
             "rgb.release" => self.with_keyboard(|kb| { kb.release()?; Ok(json!({"ok": true})) }).map_err(Into::into),
+            "rgb.save" => {
+                let frame = self.with_keyboard(|kb| Ok(*kb.frame()))?;
+                let (slot, _, _, st) = self.mutate(slot, true, |d, _| { d.rgb = frame; Ok(()) })?;
+                Ok(json!({"ok": true, "slot": slot, "draft": st}))
+            }
+            // ----- stored lighting ------------------------------------------
+            "rgb.profile.get" => {
+                let (slot, data, _, st) = self.view(slot)?;
+                let mut v = frame_json(&data.rgb);
+                v["slot"] = slot.into();
+                v["draft"] = serde_json::to_value(st).unwrap();
+                Ok(v)
+            }
+            "rgb.profile.set" => {
+                let rows = if p.0.get("rows").is_some() { Some(p.frame("rows")?) } else { None };
+                let colors = if p.0.get("colors").is_some() { Some(p.color_map("colors")?) } else { None };
+                let brightness = p.opt_u8("brightness")?;
+                let (slot, data, _, st) = self.mutate(slot, persist, |d, layout| {
+                    if let Some(f) = rows { d.rgb = f; }
+                    if let Some(c) = &colors { d.set_key_colors(layout, c)?; }
+                    if let Some(b) = brightness { d.set_brightness(b); }
+                    Ok(())
+                })?;
+                let mut v = frame_json(&data.rgb);
+                v["slot"] = slot.into();
+                v["brightness"] = data.brightness().into();
+                v["draft"] = serde_json::to_value(st).unwrap();
+                Ok(v)
+            }
             "rgb.brightness.get" => {
-                let slot = p.opt_u8("slot")?;
-                self.with_keyboard(|kb| {
-                    let slot = slot.unwrap_or_else(|| kb.default_rgb_slot());
-                    Ok(json!({"value": kb.brightness(slot)?, "slot": slot}))
-                }).map_err(Into::into)
+                let (slot, data, _, _) = self.view(slot)?;
+                Ok(json!({"value": data.brightness(), "slot": slot}))
             }
             "rgb.brightness.set" => {
                 let v = p.u8("value")?;
-                let slot = p.opt_u8("slot")?;
-                self.with_keyboard(|kb| {
-                    let slot = slot.unwrap_or_else(|| kb.default_rgb_slot());
-                    kb.set_brightness(v, slot)?;
-                    Ok(json!({"value": v, "slot": slot}))
-                }).map_err(Into::into)
+                let (slot, _, _, st) = self.mutate(slot, persist, |d, _| { d.set_brightness(v); Ok(()) })?;
+                Ok(json!({"value": v, "slot": slot, "draft": st}))
             }
-            "rgb.profile.get" => {
-                let slot = p.opt_u8("slot")?;
-                self.with_keyboard(|kb| {
-                    let slot = slot.unwrap_or_else(|| kb.default_rgb_slot());
-                    let mut v = frame_json(&kb.read_rgb_profile(slot)?);
-                    v["slot"] = slot.into();
-                    Ok(v)
-                }).map_err(Into::into)
+            "rgb.effects.get" => {
+                let (slot, data, _, _) = self.view(slot)?;
+                Ok(json!({"slot": slot, "brightness": data.brightness(), "layers": data.effects()}))
             }
-            "rgb.profile.set" => {
-                let rows = p.0.get("rows").and_then(Value::as_array).ok_or_else(|| ApiError::invalid("rows must be an array"))?;
-                let mut frame = Frame::default();
-                for (r, row) in rows.iter().take(ROWS).enumerate() {
-                    for (c, v) in row.as_array().into_iter().flatten().take(COLS).enumerate() {
-                        if let Some(s) = v.as_str() {
-                            frame.set(r, c, Rgb::parse_hex(s).ok_or_else(|| ApiError::invalid(format!("bad colour {s:?}")))?);
-                        }
-                    }
-                }
-                let slot = p.opt_u8("slot")?;
-                let brightness = p.opt_u8("brightness")?;
-                self.with_keyboard(|kb| {
-                    let slot = slot.unwrap_or_else(|| kb.default_rgb_slot());
-                    kb.write_rgb_profile_with(&frame, brightness, slot)?;
-                    Ok(json!({"ok": true, "slot": slot}))
-                }).map_err(Into::into)
-            }
-            "rgb.save" => {
-                let slot = p.opt_u8("slot")?;
-                self.with_keyboard(|kb| {
-                    let slot = slot.unwrap_or_else(|| kb.default_rgb_slot());
-                    let frame = *kb.frame();
-                    kb.write_rgb_profile(&frame, slot)?;
-                    Ok(json!({"ok": true, "slot": slot}))
-                }).map_err(Into::into)
+            "rgb.effects.set" => {
+                let layers: Vec<pb::EffectLayer> = serde_json::from_value(p.0.get("layers").cloned().unwrap_or(json!([]))).map_err(|e| ApiError::invalid(format!("layers: {e}")))?;
+                let (slot, data, _, st) = self.mutate(slot, persist, |d, _| { d.set_effects(layers); Ok(()) })?;
+                Ok(json!({"slot": slot, "layers": data.effects(), "draft": st}))
             }
             "theme.apply" => {
                 let dir = match p.opt_string("dir") {
                     Some(d) => PathBuf::from(expand_home(&d)),
                     None => theme::default_theme_dir().ok_or_else(|| ApiError::invalid("no XDG state dir; pass dir"))?,
                 };
-                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
+                let do_persist = p.bool("persist").unwrap_or(false);
                 let colors = theme::load_theme(&dir).map_err(ApiError::from)?;
-                self.with_keyboard(|kb| {
+                let frame = self.with_keyboard(|kb| {
                     let frame = theme::frame_from_theme(&colors, kb.layout());
                     kb.set_frame(frame)?;
-                    if persist {
-                        let slot = kb.default_rgb_slot();
-                        kb.write_rgb_profile(&frame, slot)?;
-                    }
-                    Ok(json!({"ok": true, "theme_dir": dir, "colors": colors, "persisted": persist}))
-                }).map_err(Into::into)
+                    Ok(frame)
+                })?;
+                if do_persist {
+                    self.mutate(None, true, |d, _| { d.rgb = frame; Ok(()) })?;
+                }
+                Ok(json!({"ok": true, "theme_dir": dir, "colors": colors, "persisted": do_persist}))
             }
+            // ----- settings ---------------------------------------------------
             "settings.get" => {
-                let slot = p.opt_u8("slot")?;
-                self.with_keyboard(|kb| {
-                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
-                    let mut v = serde_json::to_value(kb.settings(slot)?).unwrap();
-                    v["slot"] = slot.into();
-                    Ok(v)
-                }).map_err(Into::into)
+                let (slot, data, _, st) = self.view(slot)?;
+                let mut v = serde_json::to_value(data.settings()).unwrap();
+                v["slot"] = slot.into();
+                v["draft"] = serde_json::to_value(st).unwrap();
+                Ok(v)
             }
             "settings.set" => {
-                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
                 let patch = p.0.clone();
-                self.with_keyboard(|kb| {
-                    let active = kb.active_profile()?;
-                    let mut s = kb.settings(active)?;
+                let (slot, data, _, st) = self.mutate(slot, persist, |d, _| {
+                    let mut s = d.settings();
                     if let Some(v) = patch.get("actuation_mm").and_then(Value::as_f64) { s.actuation_mm = v as f32; }
                     if let Some(v) = patch.get("rapid_trigger").and_then(Value::as_bool) { s.rapid_trigger = v; }
                     if let Some(v) = patch.get("rt_press_mm").and_then(Value::as_f64) { s.rt_press_mm = v as f32; }
@@ -320,15 +508,39 @@ impl Api {
                         Some(v) => if let Some(f) = v.as_f64() { s.rt_release_mm = Some(f as f32) },
                         None => {}
                     }
+                    if let Some(v) = patch.get("continuous_rt").and_then(Value::as_bool) { s.continuous_rt = v; }
                     if let Some(v) = patch.get("tachyon").and_then(Value::as_bool) { s.tachyon = v; }
-                    kb.set_settings(&s, persist.then_some(active))?;
-                    let mut out = serde_json::to_value(if persist { kb.settings(active)? } else { s }).unwrap();
-                    out["persisted"] = persist.into();
-                    out["slot"] = active.into();
-                    Ok(out)
-                }).map_err(Into::into)
+                    d.set_settings(&s);
+                    Ok(())
+                })?;
+                let mut v = serde_json::to_value(data.settings()).unwrap();
+                v["slot"] = slot.into();
+                v["draft"] = serde_json::to_value(st).unwrap();
+                Ok(v)
             }
-            "settings.global.get" => self.with_keyboard(|kb| Ok(serde_json::to_value(kb.global_settings()?).unwrap())).map_err(Into::into),
+            "actuation.keys.get" => {
+                let (slot, data, layout, _) = self.view(slot)?;
+                let m: serde_json::Map<String, Value> = data.per_key_actuation(&layout).into_iter().map(|(k, mm)| (k, json!(mm))).collect();
+                Ok(json!({"slot": slot, "keys": m}))
+            }
+            "actuation.keys.set" => {
+                let map = p.0.get("keys").and_then(Value::as_object).ok_or_else(|| ApiError::invalid("keys must be an object"))?;
+                let changes: Vec<(String, Option<f32>)> = map.iter().map(|(k, v)| (k.clone(), v.as_f64().map(|f| f as f32))).collect();
+                let (slot, data, layout, st) = self.mutate(slot, persist, |d, l| d.set_per_key_actuation(l, &changes))?;
+                let m: serde_json::Map<String, Value> = data.per_key_actuation(&layout).into_iter().map(|(k, mm)| (k, json!(mm))).collect();
+                Ok(json!({"slot": slot, "keys": m, "draft": st}))
+            }
+            "rapid_trigger.keys.get" => {
+                let (slot, data, layout, _) = self.view(slot)?;
+                Ok(json!({"slot": slot, "keys": data.rt_keys(&layout)}))
+            }
+            "rapid_trigger.keys.set" => {
+                let map = p.0.get("keys").and_then(Value::as_object).ok_or_else(|| ApiError::invalid("keys must be an object"))?;
+                let changes: Vec<(String, bool)> = map.iter().map(|(k, v)| (k.clone(), v.as_bool().unwrap_or(false))).collect();
+                let (slot, data, layout, st) = self.mutate(slot, persist, |d, l| d.set_rt_keys(l, &changes))?;
+                Ok(json!({"slot": slot, "keys": data.rt_keys(&layout), "draft": st}))
+            }
+            "settings.global.get" => self.with_keyboard(|kb| Ok(global_json(&kb.global_settings()?))).map_err(Into::into),
             "settings.global.set" => {
                 let patch = p.0.clone();
                 self.with_keyboard(|kb| {
@@ -343,94 +555,105 @@ impl Api {
                     g.numlock_inverted.get_or_insert(0);
                     g.debounce_filter.get_or_insert(0);
                     kb.set_global_settings(&g)?;
-                    Ok(serde_json::to_value(kb.global_settings()?).unwrap())
+                    Ok(global_json(&kb.global_settings()?))
                 }).map_err(Into::into)
             }
+            "settings.device.get" => self.with_keyboard(|kb| Ok(json!({"compat_mode": kb.compat_mode()?, "gamepad_mode": kb.gamepad_mode()?, "raw": kb.device_config()?}))).map_err(Into::into),
+            "settings.device.set" => {
+                let compat = p.bool("compat_mode");
+                let gamepad = p.bool("gamepad_mode");
+                self.drafts.lock().unwrap_or_else(|p| p.into_inner()).clear();
+                self.with_keyboard(|kb| {
+                    if let Some(c) = compat { kb.set_compat_mode(c)?; }
+                    if let Some(g) = gamepad { kb.set_gamepad_mode(g)?; }
+                    Ok(json!({"ok": true, "restarting": compat.is_some() || gamepad.is_some()}))
+                }).map_err(Into::into)
+            }
+            "settings.reset" => {
+                if !p.bool("confirm").unwrap_or(false) {
+                    return Err(ApiError::invalid("resetting the keyboard is irreversible; pass confirm=true"));
+                }
+                self.drafts.lock().unwrap_or_else(|p| p.into_inner()).clear();
+                self.with_keyboard(|kb| { kb.cmd(Command::ResetSettings, [0; 4])?; Ok(json!({"ok": true})) }).map_err(Into::into)
+            }
+            // ----- key map ----------------------------------------------------
             "keymap.get" => {
                 let layer = p.opt_u8("layer")?.unwrap_or(0);
-                let slot = p.opt_u8("slot")?;
-                self.with_keyboard(|kb| {
-                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
-                    let stored = kb.mapping(slot, layer)?;
-                    let rows = stored.unwrap_or_else(|| kb.layout().default_mapping(layer));
-                    Ok(mapping_json(kb, slot, layer, &rows, stored.is_some()))
-                }).map_err(Into::into)
+                let (slot, data, layout, st) = self.view(slot)?;
+                let stored = data.mapping.get(layer as usize).map(|m| m.is_some()).unwrap_or(false);
+                Ok(mapping_json(&layout, slot, layer, &data.mapping_layer(layer, &layout), stored, &st))
             }
             "keymap.set_key" => {
                 let key = p.string("key")?;
                 let code = p.keycode("code")?;
                 let layer = p.opt_u8("layer")?.unwrap_or(0);
-                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
-                self.with_keyboard(|kb| {
-                    let slot = kb.active_profile()?;
-                    let rows = kb.set_key_mapping(layer, &key, code, persist.then_some(slot))?;
-                    Ok(mapping_json(kb, slot, layer, &rows, true))
-                }).map_err(Into::into)
+                let (slot, data, layout, st) = self.mutate(slot, persist, |d, l| d.set_keys(l, layer, &[(key, code)]))?;
+                Ok(mapping_json(&layout, slot, layer, &data.mapping_layer(layer, &layout), true, &st))
             }
             "keymap.set" => {
                 let map = p.0.get("keys").and_then(Value::as_object).ok_or_else(|| ApiError::invalid("keys must be an object"))?;
                 let layer = p.opt_u8("layer")?.unwrap_or(0);
-                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
                 let mut pairs = Vec::new();
                 for (k, v) in map {
                     let s = v.as_str().ok_or_else(|| ApiError::invalid(format!("code for {k} must be a string")))?;
                     pairs.push((k.clone(), keycode::parse(s).ok_or_else(|| ApiError::invalid(format!("unknown key code {s:?}")))?));
                 }
-                self.with_keyboard(|kb| {
-                    let slot = kb.active_profile()?;
-                    let mut rows = kb.mapping_or_default(slot, layer)?;
-                    for (id, code) in &pairs {
-                        let key = kb.layout().key(id).ok_or_else(|| Error::UnknownKey(id.clone()))?;
-                        for c in &key.cells {
-                            rows[c[0] as usize][c[1] as usize] = *code;
+                let (slot, data, layout, st) = self.mutate(slot, persist, |d, l| d.set_keys(l, layer, &pairs))?;
+                Ok(mapping_json(&layout, slot, layer, &data.mapping_layer(layer, &layout), true, &st))
+            }
+            "keymap.set_layer" => {
+                let layer = p.opt_u8("layer")?.unwrap_or(0);
+                let preset = p.opt_string("preset");
+                let rows_param = p.0.get("rows").cloned();
+                let (slot, data, layout, st) = self.mutate(slot, persist, |d, l| {
+                    let rows: Option<Rows> = if let Some(name) = &preset {
+                        Some(wooting_proto::layout::preset_mapping(name, l).ok_or_else(|| Error::Other(format!("unknown preset {name:?}")))?)
+                    } else {
+                        match rows_param {
+                            Some(Value::Null) | None => None,
+                            Some(v) => Some(parse_rows(&v)?),
                         }
-                    }
-                    kb.set_mapping(layer, &rows, persist.then_some(slot))?;
-                    Ok(mapping_json(kb, slot, layer, &rows, true))
-                }).map_err(Into::into)
+                    };
+                    d.set_layer(layer, rows);
+                    Ok(())
+                })?;
+                let stored = data.mapping.get(layer as usize).map(|m| m.is_some()).unwrap_or(false);
+                Ok(mapping_json(&layout, slot, layer, &data.mapping_layer(layer, &layout), stored, &st))
             }
             "keymap.reset" => {
                 let layer = p.opt_u8("layer")?.unwrap_or(0);
-                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
-                self.with_keyboard(|kb| {
-                    let slot = kb.active_profile()?;
-                    let rows = kb.layout().default_mapping(layer);
-                    kb.set_mapping(layer, &rows, persist.then_some(slot))?;
-                    Ok(mapping_json(kb, slot, layer, &rows, true))
-                }).map_err(Into::into)
+                let (slot, data, layout, st) = self.mutate(slot, persist, |d, _| { d.set_layer(layer, None); Ok(()) })?;
+                Ok(mapping_json(&layout, slot, layer, &data.mapping_layer(layer, &layout), false, &st))
             }
-            "keycodes.list" => Ok(json!({"codes": keycode::KEYCODES.iter().map(|(c, n)| json!({"code": c, "name": n})).collect::<Vec<_>>()})),
+            "keycodes.list" => Ok(json!({"codes": keycode::KEYCODES.iter().map(|(c, n)| json!({"code": c, "name": n, "label": keycode::label(*c)})).collect::<Vec<_>>()})),
+            // ----- advanced keys ------------------------------------------------
             "advanced_keys.get" => {
-                let slot = p.opt_u8("slot")?;
-                self.with_keyboard(|kb| {
-                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
-                    Ok(json!({"slot": slot, "entries": kb.advanced_keys(slot)?}))
-                }).map_err(Into::into)
+                let (slot, data, layout, st) = self.view(slot)?;
+                Ok(json!({"slot": slot, "entries": data.advanced_keys(&layout), "draft": st}))
             }
-            "advanced_keys.set_mod_tap" => {
+            "advanced_keys.set" | "advanced_keys.set_mod_tap" => {
                 let key = p.string("key")?;
-                let hold = p.keycode("hold")?;
-                let tap = p.keycode("tap")?;
-                self.with_keyboard(|kb| Ok(json!({"entries": kb.set_mod_tap(&key, tap, hold)?}))).map_err(Into::into)
-            }
-            "advanced_keys.set" => {
-                let key = p.string("key")?;
-                let kind = p.string("kind")?;
-                let params = p.0.clone();
-                self.with_keyboard(|kb| {
+                let kind = if method == "advanced_keys.set_mod_tap" { "mod_tap".to_string() } else { p.string("kind")? };
+                let (slot, data, layout, st) = self.mutate(slot, persist, |d, l| {
                     let entry = match kind.as_str() {
-                        "mod_tap" => Keyboard::akc_mod_tap(Params(params.clone()).keycode("tap")?, Params(params.clone()).keycode("hold")?),
-                        "toggle" => Keyboard::akc_toggle(Params(params.clone()).keycode("code")?),
-                        "rappy_snappy" => kb.akc_rappy_snappy(&Params(params.clone()).string("other_key")?)?,
-                        "socd" => kb.akc_socd(&Params(params.clone()).string("other_key")?, params.get("mode").and_then(Value::as_u64).unwrap_or(1) as u32)?,
+                        "mod_tap" => Keyboard::akc_mod_tap(p.keycode("tap")?, p.keycode("hold")?),
+                        "toggle" => Keyboard::akc_toggle(p.keycode("code")?),
+                        "rappy_snappy" => pb::advanced_keys::Entry {
+                            rappy_snappy: Some(pb::advanced_keys::RappySnappy { other_key: Some(d.matrix_of(l, &p.string("other_key")?)?), p2: Some(0) }),
+                            ..Default::default()
+                        },
+                        "socd" => pb::advanced_keys::Entry {
+                            socd: Some(pb::advanced_keys::Socd { other_key: Some(d.matrix_of(l, &p.string("other_key")?)?), p2: Some(0), mode: Some(p.0.get("mode").and_then(Value::as_u64).unwrap_or(1) as u32) }),
+                            ..Default::default()
+                        },
                         "dks" => {
-                            let names = params.get("codes").and_then(Value::as_array).ok_or_else(|| ApiError::invalid("dks needs codes"))?;
+                            let names = p.0.get("codes").and_then(Value::as_array).ok_or_else(|| ApiError::invalid("dks needs codes"))?;
                             let mut codes = [0xffu8; 4];
                             for (i, n) in names.iter().take(4).enumerate() {
                                 let s = n.as_str().unwrap_or("none");
                                 codes[i] = keycode::parse(s).ok_or_else(|| ApiError::invalid(format!("unknown key code {s:?}")))?;
                             }
-                            let masks = params.get("masks").and_then(Value::as_array).map(|m| {
+                            let masks = p.0.get("masks").and_then(Value::as_array).map(|m| {
                                 let mut out = [0u8; 4];
                                 for (i, v) in m.iter().take(4).enumerate() { out[i] = v.as_u64().unwrap_or(0) as u8; }
                                 out
@@ -439,97 +662,21 @@ impl Api {
                         }
                         other => return Err(ApiError::invalid(format!("unknown kind {other:?}")).into()),
                     };
-                    Ok(json!({"entries": kb.set_advanced_key(&key, entry)?}))
-                }).map_err(Into::into)
-            }
-            "actuation.keys.get" => {
-                let slot = p.opt_u8("slot")?;
-                self.with_keyboard(|kb| {
-                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
-                    let m: serde_json::Map<String, Value> = kb.per_key_actuation(slot)?.into_iter().map(|(k, mm)| (k, json!(mm))).collect();
-                    Ok(json!({"slot": slot, "keys": m}))
-                }).map_err(Into::into)
-            }
-            "actuation.keys.set" => {
-                let map = p.0.get("keys").and_then(Value::as_object).ok_or_else(|| ApiError::invalid("keys must be an object"))?;
-                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
-                let changes: Vec<(String, Option<f32>)> = map.iter().map(|(k, v)| (k.clone(), v.as_f64().map(|f| f as f32))).collect();
-                self.with_keyboard(|kb| {
-                    let slot = kb.active_profile()?;
-                    let m: serde_json::Map<String, Value> = kb.set_per_key_actuation(&changes, persist.then_some(slot))?.into_iter().map(|(k, mm)| (k, json!(mm))).collect();
-                    Ok(json!({"slot": slot, "keys": m, "persisted": persist}))
-                }).map_err(Into::into)
-            }
-            "rapid_trigger.keys.get" => {
-                let slot = p.opt_u8("slot")?;
-                self.with_keyboard(|kb| {
-                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
-                    Ok(json!({"slot": slot, "keys": kb.rt_keys(slot)?}))
-                }).map_err(Into::into)
-            }
-            "rapid_trigger.keys.set" => {
-                let map = p.0.get("keys").and_then(Value::as_object).ok_or_else(|| ApiError::invalid("keys must be an object"))?;
-                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
-                let changes: Vec<(String, bool)> = map.iter().map(|(k, v)| (k.clone(), v.as_bool().unwrap_or(false))).collect();
-                self.with_keyboard(|kb| {
-                    let slot = kb.active_profile()?;
-                    Ok(json!({"slot": slot, "keys": kb.set_rt_keys(&changes, persist.then_some(slot))?, "persisted": persist}))
-                }).map_err(Into::into)
-            }
-            "rgb.effects.get" => {
-                let slot = p.opt_u8("slot")?;
-                self.with_keyboard(|kb| {
-                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
-                    let core = kb.rgb_core(slot)?;
-                    Ok(json!({"slot": slot, "brightness": core.payload.as_ref().and_then(|p| p.brightness), "layers": core.effects.map(|e| e.layers).unwrap_or_default()}))
-                }).map_err(Into::into)
-            }
-            "rgb.effects.set" => {
-                let layers: Vec<pb::EffectLayer> = serde_json::from_value(p.0.get("layers").cloned().unwrap_or(json!([]))).map_err(|e| ApiError::invalid(format!("layers: {e}")))?;
-                let brightness = p.opt_u8("brightness")?;
-                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
-                self.with_keyboard(|kb| {
-                    let slot = kb.active_profile()?;
-                    let core = kb.set_rgb_core(Some(pb::Effects { layers }), brightness, persist.then_some(slot))?;
-                    Ok(json!({"slot": slot, "brightness": core.payload.as_ref().and_then(|p| p.brightness), "layers": core.effects.map(|e| e.layers).unwrap_or_default(), "persisted": persist}))
-                }).map_err(Into::into)
-            }
-            "settings.device.get" => self.with_keyboard(|kb| Ok(json!({"compat_mode": kb.compat_mode()?, "gamepad_mode": kb.gamepad_mode()?, "raw": kb.device_config()?}))).map_err(Into::into),
-            "settings.device.set" => {
-                let compat = p.0.get("compat_mode").and_then(Value::as_bool);
-                let gamepad = p.0.get("gamepad_mode").and_then(Value::as_bool);
-                self.with_keyboard(|kb| {
-                    if let Some(c) = compat { kb.set_compat_mode(c)?; }
-                    if let Some(g) = gamepad { kb.set_gamepad_mode(g)?; }
-                    Ok(json!({"ok": true, "restarting": compat.is_some() || gamepad.is_some()}))
-                }).map_err(Into::into)
+                    d.set_advanced_key(l, &key, entry)
+                })?;
+                Ok(json!({"slot": slot, "entries": data.advanced_keys(&layout), "draft": st}))
             }
             "advanced_keys.remove" => {
                 let key = p.string("key")?;
-                self.with_keyboard(|kb| Ok(json!({"entries": kb.remove_advanced_key(&key)?}))).map_err(Into::into)
+                let (slot, data, layout, st) = self.mutate(slot, persist, |d, l| d.remove_advanced_key(l, &key))?;
+                Ok(json!({"slot": slot, "entries": data.advanced_keys(&layout), "draft": st}))
             }
-            "profile.rename" => {
-                let slot = p.u8("slot")?;
-                let name = p.opt_string("name");
-                let color = match p.opt_string("color") {
-                    Some(c) => Some(Rgb::parse_hex(&c).ok_or_else(|| ApiError::invalid("bad colour"))?),
-                    None => None,
-                };
-                self.with_keyboard(|kb| Ok(serde_json::to_value(kb.set_profile_metadata(slot, name.as_deref(), color)?).unwrap())).map_err(Into::into)
-            }
-            "profile.delete" => {
-                let slot = p.u8("slot")?;
-                if !p.0.get("confirm").and_then(Value::as_bool).unwrap_or(false) {
-                    return Err(ApiError::invalid("deleting a profile is irreversible; pass confirm=true"));
-                }
-                self.with_keyboard(|kb| { kb.delete_profile(slot)?; Ok(json!({"deleted": slot})) }).map_err(Into::into)
-            }
+            // ----- misc ------------------------------------------------------------
             "backup.create" => self.with_keyboard(|kb| Ok(json!({"path": backup::save(kb)?}))).map_err(Into::into),
             "raw.command" => {
                 let name = p.string("command")?;
                 let cmd = Command::parse(&name).ok_or_else(|| ApiError::invalid(format!("unknown command {name:?}")))?;
-                let confirm = p.0.get("confirm").and_then(Value::as_bool).unwrap_or(false);
-                if cmd.is_dangerous() && !confirm {
+                if cmd.is_dangerous() && !p.bool("confirm").unwrap_or(false) {
                     return Err(ApiError::invalid(format!("{cmd} resets or reflashes the keyboard; pass confirm=true")));
                 }
                 let mut params = [0u8; 4];
@@ -552,13 +699,41 @@ impl Api {
     }
 }
 
-fn mapping_json(kb: &Keyboard, slot: u8, layer: u8, rows: &[[u8; COLS]; ROWS], stored: bool) -> Value {
-    let keys: serde_json::Map<String, Value> = kb
-        .mapping_by_key(rows)
-        .into_iter()
-        .map(|(id, code, name)| (id, json!({"code": code, "name": name, "label": keycode::label(code)})))
+fn global_json(g: &pb::GlobalSettings) -> Value {
+    let ps = g.power_saving.clone().unwrap_or_default();
+    json!({
+        "dim_after_minutes": ps.dim_after_minutes.unwrap_or(0),
+        "off_after_minutes": ps.off_after_minutes.unwrap_or(0),
+        "numlock_inverted": g.numlock_inverted.unwrap_or(0) != 0,
+        "debounce_filter": g.debounce_filter.unwrap_or(0) != 0,
+    })
+}
+
+fn parse_rows(v: &Value) -> Result<Rows> {
+    let mut rows = [[keycode::NONE; COLS]; ROWS];
+    for (r, row) in v.as_array().into_iter().flatten().take(ROWS).enumerate() {
+        for (c, cell) in row.as_array().into_iter().flatten().take(COLS).enumerate() {
+            rows[r][c] = match cell {
+                Value::Number(n) => n.as_u64().unwrap_or(255) as u8,
+                Value::String(s) => keycode::parse(s).ok_or_else(|| Error::Other(format!("unknown key code {s:?}")))?,
+                _ => keycode::NONE,
+            };
+        }
+    }
+    Ok(rows)
+}
+
+fn mapping_json(layout: &Layout, slot: u8, layer: u8, rows: &Rows, stored: bool, st: &DraftStatus) -> Value {
+    let keys: serde_json::Map<String, Value> = layout
+        .keys
+        .iter()
+        .map(|k| {
+            let c = k.cells[0];
+            let code = rows[c[0] as usize][c[1] as usize];
+            (k.id.clone(), json!({"code": code, "name": keycode::name(code), "label": keycode::label(code)}))
+        })
         .collect();
-    json!({"slot": slot, "layer": layer, "stored": stored, "keys": keys, "rows": rows.iter().map(|r| r.to_vec()).collect::<Vec<_>>()})
+    json!({"slot": slot, "layer": layer, "stored": stored, "keys": keys, "rows": rows.iter().map(|r| r.to_vec()).collect::<Vec<_>>(), "draft": st})
 }
 
 fn frame_json(f: &Frame) -> Value {
@@ -581,6 +756,9 @@ impl Params {
     fn opt_string(&self, k: &str) -> Option<String> {
         self.0.get(k).and_then(Value::as_str).map(str::to_owned)
     }
+    fn bool(&self, k: &str) -> Option<bool> {
+        self.0.get(k).and_then(Value::as_bool)
+    }
     fn opt_u8(&self, k: &str) -> std::result::Result<Option<u8>, ApiError> {
         match self.0.get(k) {
             None | Some(Value::Null) => Ok(None),
@@ -598,5 +776,32 @@ impl Params {
     fn color(&self, k: &str) -> std::result::Result<Rgb, ApiError> {
         let s = self.string(k)?;
         Rgb::parse_hex(&s).ok_or_else(|| ApiError::invalid(format!("{k}: bad colour {s:?}, expected #rrggbb")))
+    }
+    fn opt_color(&self, k: &str) -> std::result::Result<Option<Rgb>, ApiError> {
+        match self.opt_string(k) {
+            Some(_) => self.color(k).map(Some),
+            None => Ok(None),
+        }
+    }
+    fn color_map(&self, k: &str) -> std::result::Result<Vec<(String, Rgb)>, ApiError> {
+        let map = self.0.get(k).and_then(Value::as_object).ok_or_else(|| ApiError::invalid(format!("{k} must be an object")))?;
+        let mut pairs = Vec::new();
+        for (key, v) in map {
+            let s = v.as_str().ok_or_else(|| ApiError::invalid(format!("colour for {key} must be a string")))?;
+            pairs.push((key.clone(), Rgb::parse_hex(s).ok_or_else(|| ApiError::invalid(format!("bad colour {s:?}")))?));
+        }
+        Ok(pairs)
+    }
+    fn frame(&self, k: &str) -> std::result::Result<Frame, ApiError> {
+        let rows = self.0.get(k).and_then(Value::as_array).ok_or_else(|| ApiError::invalid(format!("{k} must be an array")))?;
+        let mut frame = Frame::default();
+        for (r, row) in rows.iter().take(ROWS).enumerate() {
+            for (c, v) in row.as_array().into_iter().flatten().take(COLS).enumerate() {
+                if let Some(s) = v.as_str() {
+                    frame.set(r, c, Rgb::parse_hex(s).ok_or_else(|| ApiError::invalid(format!("bad colour {s:?}")))?);
+                }
+            }
+        }
+        Ok(frame)
     }
 }
