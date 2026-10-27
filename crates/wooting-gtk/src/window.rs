@@ -117,11 +117,6 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         .content(&toolbar)
         .build();
 
-    // `WOOTING_GTK_PAGE=keymap` opens on that page (handy for screenshots).
-    if let Ok(page) = std::env::var("WOOTING_GTK_PAGE") {
-        stack.set_visible_child_name(&page);
-    }
-
     // Toggle code display with the page.
     let c = ctx.clone();
     stack.connect_visible_child_name_notify(move |s| {
@@ -129,6 +124,12 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         c.view.state.borrow_mut().show_codes = codes;
         c.view.area.queue_draw();
     });
+
+    // `WOOTING_GTK_PAGE=keymap` opens on that page (handy for screenshots).
+    if let Ok(page) = std::env::var("WOOTING_GTK_PAGE") {
+        stack.set_visible_child_name(&page);
+        ctx.view.state.borrow_mut().show_codes = page == "keymap";
+    }
 
     let c = ctx.clone();
     spawn(async move {
@@ -390,6 +391,9 @@ fn keymap_page(ctx: &Ctx) -> gtk::Widget {
     });
     let l = load.clone();
     layer.connect_selected_notify(move |_| l());
+    if let Some(n) = std::env::var("WOOTING_GTK_LAYER").ok().and_then(|v| v.parse::<u32>().ok()) {
+        layer.set_selected(n);
+    }
 
     let names: Rc<Vec<String>> = Rc::new(names.iter().map(|n| n.to_string()).collect());
     let make_apply = |persist: bool| {
