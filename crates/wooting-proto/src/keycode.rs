@@ -65,6 +65,10 @@ pub fn label(code: u8) -> String {
     if let Some(d) = n.strip_prefix("kp_") {
         return format!("KP{d}");
     }
+    // Unidentified media/special codes and raw numbers: short hex.
+    if n.starts_with("media_") || n.starts_with("special_") || n.starts_with("0x") {
+        return format!("{code:02X}");
+    }
     if n.len() == 1 || n.starts_with('f') && n[1..].chars().all(|c| c.is_ascii_digit()) {
         return n.to_ascii_uppercase();
     }
@@ -126,5 +130,6 @@ mod tests {
         assert_eq!(label(0x01), "A");
         assert_eq!(label(0x4f), "↑");
         assert_eq!(label(0x5a), "KP5");
+        assert_eq!(label(0xe2), "E2");
     }
 }

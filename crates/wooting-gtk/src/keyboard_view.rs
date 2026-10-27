@@ -153,7 +153,25 @@ impl KeyboardView {
             } else {
                 key.label.clone()
             };
-            cr.set_font_size((s * 0.28).clamp(8.0, 16.0));
+            // Shrink the font until the label fits the keycap, then ellipsise.
+            let mut size = (s * 0.28).clamp(8.0, 16.0);
+            let mut text = text;
+            loop {
+                cr.set_font_size(size);
+                let fits = cr.text_extents(&text).map(|e| e.width() <= kw - 6.0).unwrap_or(true);
+                if fits || size <= 7.0 {
+                    break;
+                }
+                size -= 1.0;
+            }
+            while text.chars().count() > 2
+                && cr.text_extents(&text).map(|e| e.width() > kw - 6.0).unwrap_or(false)
+            {
+                let mut chars: Vec<char> = text.chars().collect();
+                chars.truncate(chars.len().saturating_sub(2));
+                chars.push('…');
+                text = chars.into_iter().collect();
+            }
             if let Ok(ext) = cr.text_extents(&text) {
                 let tx = x + (kw - ext.width()) / 2.0 - ext.x_bearing();
                 let ty = y + (kh + ext.height()) / 2.0;
