@@ -16,6 +16,16 @@ Verified on a Wooting 60HE+ (fw 2.14.1). Other 0xFF55 boards (Two HE ARM,
 60HE v2, 80HE) should work for RGB and profiles; the bundled layout is the
 60HE's.
 
+## Build and run
+
+```sh
+make            # build everything
+make run        # GTK app (PAGE=keymap|actuation|settings|device to open a page)
+make daemon     # wootd in the foreground
+make cli ARGS="rgb fill '#ff0000'"
+make test       # unit tests;  make check = fmt + clippy + tests
+```
+
 ## Install
 
 ```sh
