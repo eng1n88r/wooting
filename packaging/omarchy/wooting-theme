@@ -1,0 +1,19 @@
+#!/bin/bash
+# Omarchy theme-set hook: repaint the Wooting keyboard from the new theme.
+# $1 is the theme slug; ~/.local/state/omarchy/current/theme already points
+# at the new theme when theme-set hooks run. Never fail the theme switch.
+
+woot=$(command -v woot || echo "$HOME/.cargo/bin/woot")
+[[ -x $woot ]] || exit 0
+
+# Only bother when a Wooting board is plugged in (vendor 31e3).
+found=
+for dir in /sys/bus/usb/devices/*; do
+  [[ -r $dir/idVendor ]] || continue
+  [[ $(<"$dir/idVendor") == 31e3 ]] && { found=1; break; }
+done
+[[ -n $found ]] || exit 0
+
+# Persist so the colours survive a reboot or unplug.
+"$woot" theme apply --persist >/dev/null 2>&1 || true
+exit 0

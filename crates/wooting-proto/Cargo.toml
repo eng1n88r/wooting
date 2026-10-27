@@ -8,3 +8,8 @@ license.workspace = true
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
+prost = "0.14"
+toml = "0.9"
+
+[build-dependencies]
+prost-build = "0.14"

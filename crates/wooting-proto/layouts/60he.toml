@@ -1,0 +1,496 @@
+# Wooting 60HE / 60HE+ (ANSI). Matrix rows/cols follow Wooting's RGB SDK
+# matrix diagram; the 60% board leaves matrix row 0 unused. Geometry is in
+# key units (1u = 19.05 mm). `cells` lists every matrix cell a key covers,
+# primary first; the space bar has three LEDs.
+name = "Wooting 60HE+"
+cols = 14
+width = 15.0
+height = 5.0
+
+[[keys]]
+id = "esc"
+label = "Esc"
+cells = [[1, 0]]
+x = 0.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "1"
+label = "1"
+cells = [[1, 1]]
+x = 1.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "2"
+label = "2"
+cells = [[1, 2]]
+x = 2.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "3"
+label = "3"
+cells = [[1, 3]]
+x = 3.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "4"
+label = "4"
+cells = [[1, 4]]
+x = 4.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "5"
+label = "5"
+cells = [[1, 5]]
+x = 5.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "6"
+label = "6"
+cells = [[1, 6]]
+x = 6.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "7"
+label = "7"
+cells = [[1, 7]]
+x = 7.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "8"
+label = "8"
+cells = [[1, 8]]
+x = 8.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "9"
+label = "9"
+cells = [[1, 9]]
+x = 9.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "0"
+label = "0"
+cells = [[1, 10]]
+x = 10.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "minus"
+label = "-"
+cells = [[1, 11]]
+x = 11.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "equal"
+label = "="
+cells = [[1, 12]]
+x = 12.0
+y = 0.0
+w = 1.0
+
+[[keys]]
+id = "backspace"
+label = "Backspace"
+cells = [[1, 13]]
+x = 13.0
+y = 0.0
+w = 2.0
+
+[[keys]]
+id = "tab"
+label = "Tab"
+cells = [[2, 0]]
+x = 0.0
+y = 1.0
+w = 1.5
+
+[[keys]]
+id = "q"
+label = "Q"
+cells = [[2, 1]]
+x = 1.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "w"
+label = "W"
+cells = [[2, 2]]
+x = 2.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "e"
+label = "E"
+cells = [[2, 3]]
+x = 3.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "r"
+label = "R"
+cells = [[2, 4]]
+x = 4.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "t"
+label = "T"
+cells = [[2, 5]]
+x = 5.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "y"
+label = "Y"
+cells = [[2, 6]]
+x = 6.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "u"
+label = "U"
+cells = [[2, 7]]
+x = 7.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "i"
+label = "I"
+cells = [[2, 8]]
+x = 8.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "o"
+label = "O"
+cells = [[2, 9]]
+x = 9.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "p"
+label = "P"
+cells = [[2, 10]]
+x = 10.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "lbracket"
+label = "["
+cells = [[2, 11]]
+x = 11.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "rbracket"
+label = "]"
+cells = [[2, 12]]
+x = 12.5
+y = 1.0
+w = 1.0
+
+[[keys]]
+id = "backslash"
+label = "\\"
+cells = [[2, 13]]
+x = 13.5
+y = 1.0
+w = 1.5
+
+[[keys]]
+id = "capslock"
+label = "Caps"
+cells = [[3, 0]]
+x = 0.0
+y = 2.0
+w = 1.75
+
+[[keys]]
+id = "a"
+label = "A"
+cells = [[3, 1]]
+x = 1.75
+y = 2.0
+w = 1.0
+
+[[keys]]
+id = "s"
+label = "S"
+cells = [[3, 2]]
+x = 2.75
+y = 2.0
+w = 1.0
+
+[[keys]]
+id = "d"
+label = "D"
+cells = [[3, 3]]
+x = 3.75
+y = 2.0
+w = 1.0
+
+[[keys]]
+id = "f"
+label = "F"
+cells = [[3, 4]]
+x = 4.75
+y = 2.0
+w = 1.0
+
+[[keys]]
+id = "g"
+label = "G"
+cells = [[3, 5]]
+x = 5.75
+y = 2.0
+w = 1.0
+
+[[keys]]
+id = "h"
+label = "H"
+cells = [[3, 6]]
+x = 6.75
+y = 2.0
+w = 1.0
+
+[[keys]]
+id = "j"
+label = "J"
+cells = [[3, 7]]
+x = 7.75
+y = 2.0
+w = 1.0
+
+[[keys]]
+id = "k"
+label = "K"
+cells = [[3, 8]]
+x = 8.75
+y = 2.0
+w = 1.0
+
+[[keys]]
+id = "l"
+label = "L"
+cells = [[3, 9]]
+x = 9.75
+y = 2.0
+w = 1.0
+
+[[keys]]
+id = "semicolon"
+label = ";"
+cells = [[3, 10]]
+x = 10.75
+y = 2.0
+w = 1.0
+
+[[keys]]
+id = "quote"
+label = "'"
+cells = [[3, 11]]
+x = 11.75
+y = 2.0
+w = 1.0
+
+[[keys]]
+id = "enter"
+label = "Enter"
+cells = [[3, 13]]
+x = 12.75
+y = 2.0
+w = 2.25
+
+[[keys]]
+id = "lshift"
+label = "Shift"
+cells = [[4, 0]]
+x = 0.0
+y = 3.0
+w = 2.25
+
+[[keys]]
+id = "z"
+label = "Z"
+cells = [[4, 2]]
+x = 2.25
+y = 3.0
+w = 1.0
+
+[[keys]]
+id = "x"
+label = "X"
+cells = [[4, 3]]
+x = 3.25
+y = 3.0
+w = 1.0
+
+[[keys]]
+id = "c"
+label = "C"
+cells = [[4, 4]]
+x = 4.25
+y = 3.0
+w = 1.0
+
+[[keys]]
+id = "v"
+label = "V"
+cells = [[4, 5]]
+x = 5.25
+y = 3.0
+w = 1.0
+
+[[keys]]
+id = "b"
+label = "B"
+cells = [[4, 6]]
+x = 6.25
+y = 3.0
+w = 1.0
+
+[[keys]]
+id = "n"
+label = "N"
+cells = [[4, 7]]
+x = 7.25
+y = 3.0
+w = 1.0
+
+[[keys]]
+id = "m"
+label = "M"
+cells = [[4, 8]]
+x = 8.25
+y = 3.0
+w = 1.0
+
+[[keys]]
+id = "comma"
+label = ","
+cells = [[4, 9]]
+x = 9.25
+y = 3.0
+w = 1.0
+
+[[keys]]
+id = "period"
+label = "."
+cells = [[4, 10]]
+x = 10.25
+y = 3.0
+w = 1.0
+
+[[keys]]
+id = "slash"
+label = "/"
+cells = [[4, 11]]
+x = 11.25
+y = 3.0
+w = 1.0
+
+[[keys]]
+id = "rshift"
+label = "Shift"
+cells = [[4, 13]]
+x = 12.25
+y = 3.0
+w = 2.75
+
+[[keys]]
+id = "lctrl"
+label = "Ctrl"
+cells = [[5, 0]]
+x = 0.0
+y = 4.0
+w = 1.25
+
+[[keys]]
+id = "lgui"
+label = "Win"
+cells = [[5, 1]]
+x = 1.25
+y = 4.0
+w = 1.25
+
+[[keys]]
+id = "lalt"
+label = "Alt"
+cells = [[5, 2]]
+x = 2.5
+y = 4.0
+w = 1.25
+
+[[keys]]
+id = "space"
+label = "Space"
+cells = [[5, 4], [5, 6], [5, 8]]
+x = 3.75
+y = 4.0
+w = 6.25
+
+[[keys]]
+id = "ralt"
+label = "Alt"
+cells = [[5, 10]]
+x = 10.0
+y = 4.0
+w = 1.25
+
+[[keys]]
+id = "fn"
+label = "Fn"
+cells = [[5, 11]]
+x = 11.25
+y = 4.0
+w = 1.25
+
+[[keys]]
+id = "menu"
+label = "Menu"
+cells = [[5, 12]]
+x = 12.5
+y = 4.0
+w = 1.25
+
+[[keys]]
+id = "rctrl"
+label = "Ctrl"
+cells = [[5, 13]]
+x = 13.75
+y = 4.0
+w = 1.25

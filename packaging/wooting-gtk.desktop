@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Wooting
+Comment=Lighting, profiles and settings for Wooting keyboards
+Exec=wooting-gtk
+Icon=input-keyboard
+Terminal=false
+Categories=Settings;HardwareSettings;Utility;
+Keywords=keyboard;rgb;wooting;

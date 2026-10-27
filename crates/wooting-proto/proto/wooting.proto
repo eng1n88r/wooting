@@ -1,0 +1,71 @@
+// Protobuf messages carried in Wooting output/input reports.
+// Field numbers were recovered from dumps of a 60HE+ (firmware 2.14.1);
+// names are ours. See docs/protocol.md.
+syntax = "proto3";
+package wooting;
+
+// GetRgbProfileColorsPart1 (35) / Part2 (36) responses and the
+// RgbProfileColorsPart1 (0x0E) / Part2 (0x0F) output reports. Three rows
+// per message; each row is one packed RGB565 value per matrix column.
+message RgbRows {
+  message Row { repeated uint32 colors = 1 [packed = true]; }
+  repeated Row rows = 1;
+}
+
+// GetRgbProfileCore (50) response / RgbProfileCore (0x16) output report.
+message RgbProfileCore {
+  message Payload {
+    uint32 brightness = 1; // 0..=255
+    uint32 a = 2;          // observed 0xFFFF
+    uint32 b = 3;          // observed 0xFFFF
+    uint32 c = 4;
+    uint32 d = 5;
+  }
+  Payload payload = 1;
+  bytes extra = 4; // observed empty
+}
+
+// GetGlobalSettings (51) response / GlobalSettings (0x17) output report.
+message GlobalSettings {
+  message PowerSaving {
+    uint32 dim_after_minutes = 1;
+    uint32 off_after_minutes = 2;
+  }
+  PowerSaving power_saving = 1;
+  uint32 flags = 2; // observed 0
+}
+
+// GetProfileMetadata (55) response (param p3 = slot).
+message ProfileMetadata {
+  message Color { uint32 r = 1; uint32 g = 2; uint32 b = 3; }
+  string name = 1;
+  Color color = 2;
+  string icon = 3; // e.g. "woot:p:black"
+}
+
+// GetMappingProfile (48) response: six rows of 21 key codes, 0xFF = none.
+message MappingProfile {
+  message Row { bytes codes = 1; }
+  repeated Row rows = 1;
+}
+
+// GetAnalogValues (20) response: six rows of 21 analog values.
+message AnalogValues {
+  message Row { bytes values = 1; }
+  repeated Row rows = 1;
+}
+
+// GetKeyboardProfile (39) response. Meaning of fields not yet known.
+message KeyboardProfile {
+  message Payload {
+    uint32 f1 = 1;
+    uint32 f2 = 2;
+    uint32 f3 = 3;
+    uint32 f4 = 4;
+    uint32 f5 = 5;
+    uint32 f6 = 6;
+    uint32 f7 = 7;
+    uint32 f9 = 9;
+  }
+  Payload payload = 1;
+}

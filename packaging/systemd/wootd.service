@@ -1,0 +1,13 @@
+[Unit]
+Description=Wooting keyboard daemon (HTTP, socket RPC, MCP bridge)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/wootd serve
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

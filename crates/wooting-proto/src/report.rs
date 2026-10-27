@@ -27,7 +27,19 @@ pub const HEADER_LEN: usize = 6;
 /// Build an output report for `report_type` with `payload`, choosing the
 /// smallest report id that fits. Returns `None` if the payload is too large.
 pub fn build(protocol: Protocol, report_type: u8, payload: &[u8]) -> Option<Vec<u8>> {
-    let needed = HEADER_LEN - 1 + payload.len(); // bytes after the report id
+    build_with_prefix(protocol, report_type, &[], payload)
+}
+
+/// Like [`build`] but inserts `prefix` between the length and the payload.
+/// The RGB colour-row reports carry one such byte (observed `0x00`); the
+/// length field counts only `payload`.
+pub fn build_with_prefix(
+    protocol: Protocol,
+    report_type: u8,
+    prefix: &[u8],
+    payload: &[u8],
+) -> Option<Vec<u8>> {
+    let needed = HEADER_LEN - 1 + prefix.len() + payload.len(); // bytes after the report id
     let (id, size) = ARM_OUTPUT_REPORTS.iter().copied().find(|(_, s)| *s >= needed)?;
     let mut out = vec![0u8; size + 1];
     out[0] = id;
@@ -36,7 +48,9 @@ pub fn build(protocol: Protocol, report_type: u8, payload: &[u8]) -> Option<Vec<
     out[3] = report_type;
     let len = u16::try_from(payload.len()).ok()?;
     out[4..6].copy_from_slice(&len.to_be_bytes());
-    out[HEADER_LEN..HEADER_LEN + payload.len()].copy_from_slice(payload);
+    let start = HEADER_LEN + prefix.len();
+    out[HEADER_LEN..start].copy_from_slice(prefix);
+    out[start..start + payload.len()].copy_from_slice(payload);
     Some(out)
 }
 
@@ -54,5 +68,7 @@ mod tests {
         assert_eq!(big[0], 4);
         assert_eq!(big.len(), 511);
         assert!(build(Protocol::Arm, 0, &[0; 3000]).is_none());
+        let p = build_with_prefix(Protocol::Arm, kind::RGB_PROFILE_COLORS_PART1, &[0], &[0x0a, 0x01, 0x05]).unwrap();
+        assert_eq!(&p[..10], &[1, 0xD1, 0xDA, 0x0E, 0, 3, 0, 0x0a, 0x01, 0x05]);
     }
 }

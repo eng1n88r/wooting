@@ -1,0 +1,16 @@
+[package]
+name = "wooting-gtk"
+description = "GTK4/libadwaita desktop app for Wooting keyboards"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wooting-core.workspace = true
+wooting-proto.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
