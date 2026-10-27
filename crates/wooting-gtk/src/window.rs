@@ -335,40 +335,68 @@ fn lighting_page(ctx: &Ctx) -> gtk::Widget {
     page.upcast()
 }
 
+/// Key palette groups, Wootility style. (code name, tile label)
+const PALETTE: &[(&str, &[(&str, &str)])] = &[
+    ("Basic characters", &[
+        ("a", "A"), ("b", "B"), ("c", "C"), ("d", "D"), ("e", "E"), ("f", "F"), ("g", "G"), ("h", "H"), ("i", "I"),
+        ("j", "J"), ("k", "K"), ("l", "L"), ("m", "M"), ("n", "N"), ("o", "O"), ("p", "P"), ("q", "Q"), ("r", "R"),
+        ("s", "S"), ("t", "T"), ("u", "U"), ("v", "V"), ("w", "W"), ("x", "X"), ("y", "Y"), ("z", "Z"),
+        ("1", "1"), ("2", "2"), ("3", "3"), ("4", "4"), ("5", "5"), ("6", "6"), ("7", "7"), ("8", "8"), ("9", "9"), ("0", "0"),
+        ("minus", "- _"), ("equal", "= +"), ("lbracket", "[ {"), ("rbracket", "] }"), ("backslash", "\\ |"),
+        ("semicolon", "; :"), ("quote", "' \""), ("grave", "` ~"), ("comma", ", <"), ("period", ". >"), ("slash", "/ ?"),
+        ("nonus_backslash", "ISO \\"), ("nonus_hash", "ISO #"),
+    ]),
+    ("Extended characters", &[
+        ("esc", "Esc"), ("tab", "Tab"), ("capslock", "Caps"), ("backspace", "Backspace"), ("enter", "Enter"),
+        ("space", "Space"), ("lctrl", "L-Ctrl"), ("rctrl", "R-Ctrl"), ("lshift", "L-Shift"), ("rshift", "R-Shift"),
+        ("lalt", "L-Alt"), ("ralt", "R-Alt"), ("lgui", "L-Super"), ("rgui", "R-Super"), ("menu", "Menu"),
+    ]),
+    ("Navigation", &[
+        ("up", "↑"), ("down", "↓"), ("left", "←"), ("right", "→"), ("home", "Home"), ("end", "End"),
+        ("pageup", "Pg Up"), ("pagedown", "Pg Dn"), ("insert", "Ins"), ("delete", "Del"),
+        ("printscreen", "Prt Sc"), ("scrolllock", "Scr Lk"), ("pause", "Pause"),
+    ]),
+    ("Function keys", &[
+        ("f1", "F1"), ("f2", "F2"), ("f3", "F3"), ("f4", "F4"), ("f5", "F5"), ("f6", "F6"),
+        ("f7", "F7"), ("f8", "F8"), ("f9", "F9"), ("f10", "F10"), ("f11", "F11"), ("f12", "F12"),
+    ]),
+    ("Numpad", &[
+        ("kp_0", "Num 0"), ("kp_1", "Num 1"), ("kp_2", "Num 2"), ("kp_3", "Num 3"), ("kp_4", "Num 4"),
+        ("kp_5", "Num 5"), ("kp_6", "Num 6"), ("kp_7", "Num 7"), ("kp_8", "Num 8"), ("kp_9", "Num 9"),
+        ("numlock", "Num Lk"), ("kp_slash", "Num /"), ("kp_asterisk", "Num *"), ("kp_minus", "Num -"),
+        ("kp_plus", "Num +"), ("kp_enter", "Num ⏎"),
+    ]),
+    ("Media", &[
+        ("play_pause", "media-playback-start-symbolic"), ("prev_track", "media-skip-backward-symbolic"),
+        ("next_track", "media-skip-forward-symbolic"), ("mute", "audio-volume-muted-symbolic"),
+        ("volume_down", "audio-volume-low-symbolic"), ("volume_up", "audio-volume-high-symbolic"),
+    ]),
+    ("Keyboard", &[
+        ("fn1", "Fn 1"), ("fn2", "Fn 2"), ("profile_2", "Profile 2"), ("profile_3", "Profile 3"), ("profile_4", "Profile 4"),
+        ("rgb_brightness_down", "RGB -"), ("rgb_brightness_up", "RGB +"), ("rgb_mode", "RGB mode"), ("none", "Disable"),
+    ]),
+];
+
 fn keymap_page(ctx: &Ctx) -> gtk::Widget {
     let page = page_box();
     let group = adw::PreferencesGroup::builder()
         .title("Key map")
-        .description("Select keys on the keyboard, pick what they should send, then Apply (live) or Save (also written to the active profile's flash). 'none' disables a key.")
+        .description("Select keys on the keyboard (Shift-click for several), then click what they should send. Changes are written to the active profile right away.")
         .build();
 
     let layer = gtk::DropDown::from_strings(&["Main layer", "Fn layer 1", "Fn layer 2"]);
     layer.set_valign(gtk::Align::Center);
+    let reset = gtk::Button::with_label("Reset layer to factory");
+    reset.set_valign(gtk::Align::Center);
     let layer_row = adw::ActionRow::builder().title("Layer").build();
+    layer_row.add_suffix(&reset);
     layer_row.add_suffix(&layer);
     group.add(&layer_row);
-
-    let names: Vec<&str> = wooting_proto::keycode::KEYCODES.iter().map(|(_, n)| *n).collect();
-    let code = gtk::DropDown::from_strings(&names);
-    code.set_enable_search(true);
-    code.set_valign(gtk::Align::Center);
-    let apply = gtk::Button::with_label("Apply");
-    apply.set_valign(gtk::Align::Center);
-    let save = gtk::Button::with_label("Apply & Save");
-    save.add_css_class("suggested-action");
-    save.set_valign(gtk::Align::Center);
-    let code_row = adw::ActionRow::builder().title("Selected keys send").build();
-    code_row.add_suffix(&code);
-    code_row.add_suffix(&apply);
-    code_row.add_suffix(&save);
-    group.add(&code_row);
-
-    let reset = gtk::Button::with_label("Reset layer");
-    reset.set_valign(gtk::Align::Center);
-    let reset_row = adw::ActionRow::builder().title("Factory mapping").subtitle("Restores this layer's default mapping and saves it").build();
-    reset_row.add_suffix(&reset);
-    group.add(&reset_row);
     page.append(&group);
+
+    let search = gtk::SearchEntry::new();
+    search.set_placeholder_text(Some("Search for a key"));
+    page.append(&search);
 
     let c = ctx.clone();
     let l = layer.clone();
@@ -396,34 +424,78 @@ fn keymap_page(ctx: &Ctx) -> gtk::Widget {
         layer.set_selected(n);
     }
 
-    let names: Rc<Vec<String>> = Rc::new(names.iter().map(|n| n.to_string()).collect());
-    let make_apply = |persist: bool| {
-        let c = ctx.clone();
-        let layer = layer.clone();
-        let code = code.clone();
-        let load = load.clone();
-        let names = names.clone();
-        move |_: &gtk::Button| {
-            let keys = c.view.selected();
-            if keys.is_empty() {
-                c.toast("Select some keys first");
-                return;
-            }
-            let name = names[code.selected() as usize].to_string();
-            let map: serde_json::Map<String, Value> = keys.into_iter().map(|k| (k, Value::String(name.clone()))).collect();
-            let c = c.clone();
+    // Palette of tiles; clicking one assigns it to the selected keys.
+    let css = gtk::CssProvider::new();
+    css.load_from_string(".keytile { min-width: 44px; min-height: 36px; padding: 4px 6px; font-weight: 600; } .keygroup { font-weight: 700; margin-top: 10px; }");
+    gtk::style_context_add_provider_for_display(&gdk::Display::default().unwrap(), &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    let palette = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let mut tiles: Vec<(gtk::Button, String, String)> = Vec::new();
+    let mut groups: Vec<(gtk::Label, gtk::FlowBox)> = Vec::new();
+    for (title, keys) in PALETTE {
+        let title_label = gtk::Label::new(Some(title));
+        title_label.set_xalign(0.0);
+        title_label.add_css_class("keygroup");
+        palette.append(&title_label);
+        let flow = gtk::FlowBox::new();
+        flow.set_selection_mode(gtk::SelectionMode::None);
+        flow.set_max_children_per_line(20);
+        flow.set_column_spacing(4);
+        flow.set_row_spacing(4);
+        flow.set_homogeneous(true);
+        flow.set_halign(gtk::Align::Start);
+        flow.set_min_children_per_line(6);
+        for (name, label) in *keys {
+            let btn = if label.ends_with("-symbolic") {
+                gtk::Button::from_icon_name(label)
+            } else {
+                gtk::Button::with_label(label)
+            };
+            btn.add_css_class("keytile");
+            btn.set_tooltip_text(Some(name));
+            let c = ctx.clone();
+            let l = layer.clone();
             let load = load.clone();
-            let layer = layer.selected() as u8;
-            spawn(async move {
-                if c.call("keymap.set", json!({"keys": map, "layer": layer, "persist": persist})).await.is_some() {
-                    c.toast(if persist { "Mapping saved to keyboard" } else { "Mapping applied (not saved)" });
+            let name = name.to_string();
+            let name_for_click = name.clone();
+            btn.connect_clicked(move |_| {
+                let name = &name_for_click;
+                let keys = c.view.selected();
+                if keys.is_empty() {
+                    c.toast("Select some keys on the keyboard first");
+                    return;
                 }
-                load();
+                let map: serde_json::Map<String, Value> = keys.into_iter().map(|k| (k, Value::String(name.clone()))).collect();
+                let c = c.clone();
+                let load = load.clone();
+                let layer = l.selected() as u8;
+                spawn(async move {
+                    if c.call("keymap.set", json!({"keys": map, "layer": layer, "persist": true})).await.is_some() {
+                        c.toast("Mapping written to keyboard");
+                    }
+                    load();
+                });
             });
+            flow.insert(&btn, -1);
+            tiles.push((btn, name, label.to_string()));
         }
-    };
-    apply.connect_clicked(make_apply(false));
-    save.connect_clicked(make_apply(true));
+        palette.append(&flow);
+        groups.push((title_label, flow));
+    }
+    let tiles = Rc::new(tiles);
+    let groups = Rc::new(groups);
+    search.connect_search_changed(move |e| {
+        let q = e.text().to_lowercase();
+        for (btn, name, label) in tiles.iter() {
+            let hit = q.is_empty() || name.contains(&q) || label.to_lowercase().contains(&q);
+            btn.parent().map(|p| p.set_visible(hit));
+        }
+        for (title, flow) in groups.iter() {
+            let any = (0..).map_while(|i| flow.child_at_index(i)).any(|ch| ch.is_visible());
+            title.set_visible(any);
+        }
+    });
+    page.append(&palette);
+
     let c = ctx.clone();
     let l = layer.clone();
     let ld = load.clone();
@@ -439,7 +511,11 @@ fn keymap_page(ctx: &Ctx) -> gtk::Widget {
         });
     });
     load();
-    page.upcast()
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_vexpand(true);
+    scroll.set_child(Some(&page));
+    scroll.upcast()
 }
 
 fn actuation_page(ctx: &Ctx) -> gtk::Widget {
