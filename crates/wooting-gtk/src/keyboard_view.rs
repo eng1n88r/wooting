@@ -1,7 +1,7 @@
 //! A drawn keyboard: shows per-key colours, supports click/shift-click
 //! selection and drag-and-drop of image files.
 
-use gtk::{cairo, gdk, prelude::*};
+use gtk::{cairo, gdk, pango, prelude::*};
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
 use wooting_proto::{Frame, Layout, Rgb};
 
@@ -153,31 +153,30 @@ impl KeyboardView {
             } else {
                 key.label.clone()
             };
-            // Shrink the font until the label fits the keycap, then ellipsise.
+            if text.is_empty() {
+                continue;
+            }
+            // Pango (not cairo's toy text API) so symbol glyphs fall back to
+            // whatever font has them; shrink to fit, then ellipsise.
+            let layout = self.area.create_pango_layout(Some(&text));
+            layout.set_width(((kw - 6.0) * pango::SCALE as f64) as i32);
+            layout.set_ellipsize(pango::EllipsizeMode::End);
+            layout.set_alignment(pango::Alignment::Center);
             let mut size = (s * 0.28).clamp(8.0, 16.0);
-            let mut text = text;
             loop {
-                cr.set_font_size(size);
-                let fits = cr.text_extents(&text).map(|e| e.width() <= kw - 6.0).unwrap_or(true);
+                let mut font = pango::FontDescription::new();
+                font.set_absolute_size(size * pango::SCALE as f64);
+                layout.set_font_description(Some(&font));
+                let (ink, _) = layout.pixel_extents();
+                let fits = layout.is_ellipsized() == false && ink.width() as f64 <= kw - 6.0;
                 if fits || size <= 7.0 {
                     break;
                 }
                 size -= 1.0;
             }
-            while text.chars().count() > 2
-                && cr.text_extents(&text).map(|e| e.width() > kw - 6.0).unwrap_or(false)
-            {
-                let mut chars: Vec<char> = text.chars().collect();
-                chars.truncate(chars.len().saturating_sub(2));
-                chars.push('…');
-                text = chars.into_iter().collect();
-            }
-            if let Ok(ext) = cr.text_extents(&text) {
-                let tx = x + (kw - ext.width()) / 2.0 - ext.x_bearing();
-                let ty = y + (kh + ext.height()) / 2.0;
-                cr.move_to(tx, ty);
-                let _ = cr.show_text(&text);
-            }
+            let (_, logical) = layout.pixel_extents();
+            cr.move_to(x + 3.0, y + (kh - logical.height() as f64) / 2.0);
+            pangocairo::functions::show_layout(cr, &layout);
         }
     }
 }

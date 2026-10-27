@@ -41,7 +41,8 @@ pub const KEYCODES: &[(u8, &str)] = &[
 
 pub const NONE: u8 = 0xff;
 
-/// Short keycap-style label for a code (`"["`, `"Shift"`, `"F5"`, `"↑"`).
+/// Short keycap-style label for a code (`"["`, `"Shift"`, `"F5"`, `"↑"`);
+/// empty for an unmapped key.
 pub fn label(code: u8) -> String {
     let n = name(code);
     let fixed = match n.as_str() {
@@ -57,11 +58,11 @@ pub fn label(code: u8) -> String {
         "insert" => "Ins", "delete" => "Del", "printscreen" => "Prt Sc", "scrolllock" => "Scr Lk",
         "pause" => "Pause", "numlock" => "Num Lk", "kp_enter" => "Num ⏎", "kp_slash" => "Num /",
         "kp_asterisk" => "Num *", "kp_minus" => "Num -", "kp_plus" => "Num +",
-        "next_track" => ">>", "prev_track" => "<<", "play_pause" => ">||", "mute" => "Mute",
+        "next_track" => "⏭", "prev_track" => "⏮", "play_pause" => "⏯", "mute" => "Mute",
         "volume_up" => "Vol +", "volume_down" => "Vol -",
         "rgb_brightness_up" => "RGB +", "rgb_brightness_down" => "RGB -", "rgb_mode" => "Mode",
         "profile_2" => "P2", "profile_3" => "P3", "profile_4" => "P4",
-        "none" => "—",
+        "none" => "",
         _ => "",
     };
     if !fixed.is_empty() {
@@ -140,7 +141,7 @@ mod tests {
         assert_eq!(label(0x01), "A");
         assert_eq!(label(0x4f), "↑");
         assert_eq!(label(0x5a), "Num 4");
-        assert_eq!(label(0xc2), ">||");
+        assert_eq!(label(0xc2), "⏯");
         assert_eq!(label(0xe2), "P2");
         assert_eq!(label(0xe8), "E8");
     }
