@@ -36,3 +36,9 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<api::ApiError> for Error {
+    fn from(e: api::ApiError) -> Self {
+        Error::Other(e.message)
+    }
+}

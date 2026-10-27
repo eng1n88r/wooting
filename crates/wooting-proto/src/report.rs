@@ -26,13 +26,13 @@ pub mod kind {
     pub const UNKNOWN_12: u8 = 0x12;
     pub const ANALOG_CURVE: u8 = 0x13;
     pub const MAPPING_PROFILE: u8 = 0x14;
-    pub const UNKNOWN_15: u8 = 0x15;
+    pub const PER_KEY: u8 = 0x15;
     pub const RGB_PROFILE_CORE: u8 = 0x16;
     pub const GLOBAL_SETTINGS: u8 = 0x17;
     pub const ADVANCED_KEYS: u8 = 0x18;
     pub const PROFILE_METADATA: u8 = 0x1A;
     pub const PROFILE_BLOB: u8 = 0x1B;
-    pub const UNKNOWN_1D: u8 = 0x1D;
+    pub const RT_KEYS: u8 = 0x1D;
     pub const UNKNOWN_28: u8 = 0x28;
 }
 

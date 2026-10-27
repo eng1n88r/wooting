@@ -15,7 +15,7 @@ message RgbRows {
   repeated Row rows = 1;
 }
 
-// GetRgbProfileCore (50) response / RgbProfileCore (0x16) output report.
+// GetRgbProfileCore (50, p3 = slot) response / RgbProfileCore (0x16) report.
 message RgbProfileCore {
   message Payload {
     optional uint32 brightness = 1; // 0..=255
@@ -25,9 +25,63 @@ message RgbProfileCore {
     optional uint32 d = 5;
   }
   Payload payload = 1;
-  // Effect layers: layers{ layer{ effect{ kind, speed, direction … } } }.
-  // Kept opaque; written back verbatim.
-  bytes effects = 4;
+  // Effect layers; the first is the base effect (none = Static), later ones
+  // are the "RGB Fx layers". Always present on the wire (empty = Static).
+  Effects effects = 4;
+}
+
+message Effects {
+  repeated EffectLayer layers = 1;
+}
+
+// One effect layer; exactly one of the kinds is set.
+message EffectLayer {
+  message Wave   { optional uint32 look = 1; optional uint32 speed = 2; optional uint32 direction = 3; }
+  message Scan   { optional uint32 width = 1; optional uint32 speed = 2; optional uint32 base_brightness = 3; optional uint32 direction = 4; }
+  message Breath { optional uint32 speed = 1; optional uint32 p3 = 3; }
+  message Cycle  { optional uint32 look = 1; optional uint32 speed = 2; }
+  message Ripple { optional uint32 p1 = 1; optional uint32 p2 = 2; optional uint32 p3 = 3; optional uint32 p4 = 4; }
+  message Trail  { optional uint32 p1 = 1; optional uint32 p2 = 2; optional uint32 p3 = 3; optional uint32 p4 = 4; }
+  message Touch  { optional uint32 p1 = 1; optional uint32 p2 = 2; optional uint32 p3 = 3; optional uint32 p4 = 4; optional uint32 p5 = 5; }
+  message Jelly  { optional uint32 p1 = 1; optional uint32 p2 = 2; }
+  message Aoe    { optional uint32 p1 = 1; optional uint32 p2 = 2; }
+  message Mixing { optional uint32 p1 = 1; }
+  message RtDisplay { optional uint32 p1 = 1; }
+  message Noise  { optional uint32 color1 = 1; optional uint32 color2 = 2; optional uint32 p3 = 3; optional uint32 p4 = 4; }
+  message Spiral { optional uint32 color1 = 1; optional uint32 color2 = 2; optional uint32 spin_speed = 3; optional uint32 spiral_speed = 4; }
+  Wave wave = 1;
+  Scan scan = 2;
+  Breath breath = 3;
+  Cycle cycle = 4;
+  Ripple ripple = 5;
+  Trail trail = 6;
+  Touch touch = 7;
+  Jelly jelly = 8;
+  Aoe aoe = 9;
+  Mixing mixing = 10;
+  RtDisplay rt_display = 11;
+  bytes kind12 = 12;
+  bytes kind13 = 13;
+  Noise noise = 14;
+  Spiral spiral = 15;
+}
+
+// PerKey (0x15) report: per-key overrides. `packed = (actuation_code << 16) | matrix_id`.
+message PerKey {
+  message Entry { repeated uint32 packed = 1 [packed = false]; }
+  bytes kind1 = 1;
+  bytes kind2 = 2;
+  bytes kind3 = 3;
+  repeated Entry actuation = 4;
+}
+
+// RtKeys (0x1D) report: keys with rapid trigger enabled individually.
+message RtKeys {
+  message Keys {
+    repeated uint32 key = 1 [packed = false];
+    optional uint32 enabled = 3;
+  }
+  Keys keys = 1;
 }
 
 // GetGlobalSettings (51) response / GlobalSettings (0x17, flags 1) report.
@@ -37,7 +91,8 @@ message GlobalSettings {
     optional uint32 off_after_minutes = 2;
   }
   PowerSaving power_saving = 1;
-  optional uint32 flags = 2; // observed 0
+  optional uint32 numlock_inverted = 2;
+  optional uint32 debounce_filter = 3;
 }
 
 // GetProfileMetadata (55, p3 = slot) response / ProfileMetadata (0x1A) report.
@@ -72,7 +127,7 @@ message KeyboardProfile {
     optional uint32 rt_press = 4;      // sensitivity (press / "activate")
     optional uint32 tachyon = 5;       // 0/1
     optional uint32 f6 = 6;            // observed 2
-    optional uint32 f7 = 7;            // observed 1
+    optional uint32 rt_ends_at_actuation = 7; // 1 = normal, 0 = continuous rapid trigger
     optional uint32 rt_release = 8;    // only when split sensitivity is on
     optional uint32 f9 = 9;            // 1 while tachyon is on
   }
@@ -89,19 +144,21 @@ message AnalogCurve {
 }
 
 // GetAkcProfile (52, p3 = slot) response / AdvancedKeys (0x18) report,
-// committed with SaveAkcProfile (53, p3 = slot). Only mod-tap entries have
-// been observed; other kinds presumably use other entry fields.
+// committed with SaveAkcProfile (53, p3 = slot).
 message AdvancedKeys {
+  // Four bindings fired at four travel positions; `masks` are per-binding bit
+  // masks of the press phases (observed a9 a4 a8 aa for the stock preset).
+  message Dks { bytes codes = 1; bytes masks = 2; }
   message ModTap { optional uint32 tap = 1; optional uint32 hold = 2; }
+  message Toggle { optional uint32 code = 1; }
+  message RappySnappy { optional uint32 other_key = 1; optional uint32 p2 = 2; }
+  message Socd { optional uint32 other_key = 1; optional uint32 p2 = 2; optional uint32 mode = 3; }
   message Entry {
-    // Other entry kinds (DKS, SOCD, Rappy Snappy …) are kept opaque so a
-    // rewrite of the table never drops them. Field 5 was seen on a Rapid
-    // profile: 08 63 10 04 18 00.
-    bytes kind1 = 1;
+    Dks dks = 1;
     ModTap mod_tap = 2;
-    bytes kind3 = 3;
-    bytes kind4 = 4;
-    bytes kind5 = 5;
+    Toggle toggle = 3;
+    RappySnappy rappy_snappy = 4;
+    Socd socd = 5;
     bytes kind6 = 6;
     bytes kind7 = 7;
     optional uint32 key = 8; // matrix id (row << 5 | col) of the key

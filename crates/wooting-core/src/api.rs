@@ -10,7 +10,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{path::PathBuf, sync::Mutex};
-use wooting_proto::{keycode, Command, Frame, Rgb, COLS, ROWS};
+use wooting_proto::{keycode, pb, Command, Frame, Rgb, COLS, ROWS};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
@@ -90,8 +90,16 @@ pub fn methods() -> Vec<MethodInfo> {
         MethodInfo { name: "theme.apply", description: "Colour the keyboard from an Omarchy theme directory (default: the current theme). persist=true also saves it to the keyboard.", params: obj(json!({"dir": {"type": "string"}, "persist": {"type": "boolean"}}), &[]) },
         MethodInfo { name: "settings.get", description: "Actuation point, rapid trigger and Tachyon settings stored in a profile slot (default: active).", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
         MethodInfo { name: "settings.set", description: "Change actuation (mm, 0.1-4.0), rapid trigger (on/off, press/release sensitivity in mm) and Tachyon for all keys. Applies live; persist=true also writes the active profile to flash.", params: obj(json!({"actuation_mm": {"type": "number"}, "rapid_trigger": {"type": "boolean"}, "rt_press_mm": {"type": "number"}, "rt_release_mm": {"type": ["number", "null"], "description": "null = same as press"}, "tachyon": {"type": "boolean"}, "persist": {"type": "boolean"}}), &[]) },
+        MethodInfo { name: "actuation.keys.get", description: "Per-key actuation overrides of a profile slot (default: active) as {key_id: mm}.", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
+        MethodInfo { name: "actuation.keys.set", description: "Set per-key actuation overrides: {\"keys\": {\"a\": 2.5, \"s\": null}} (null removes the override). persist=true writes flash.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": ["number", "null"]}}, "persist": {"type": "boolean"}}), &["keys"]) },
+        MethodInfo { name: "rapid_trigger.keys.get", description: "Keys with rapid trigger enabled individually in a profile slot (default: active).", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
+        MethodInfo { name: "rapid_trigger.keys.set", description: "Enable/disable rapid trigger per key: {\"keys\": {\"w\": true, \"a\": false}}. persist=true writes flash.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": "boolean"}}, "persist": {"type": "boolean"}}), &["keys"]) },
+        MethodInfo { name: "rgb.effects.get", description: "Effect layers and brightness of an RGB profile slot (default: active). Layer kinds: wave, scan, breath, cycle, ripple, trail, touch, jelly, aoe, mixing, rt_display, noise, spiral; empty = static.", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
+        MethodInfo { name: "rgb.effects.set", description: "Replace the effect layers, e.g. {\"layers\": [{\"wave\": {\"look\": 0, \"speed\": 16, \"direction\": 0}}]} ([] = static). persist=true writes flash.", params: obj(json!({"layers": {"type": "array"}, "brightness": {"type": "integer"}, "persist": {"type": "boolean"}}), &["layers"]) },
+        MethodInfo { name: "settings.device.get", description: "Device-wide hardware flags: compatibility mode (6KRO) and gamepad mode.", params: obj(json!({}), &[]) },
+        MethodInfo { name: "settings.device.set", description: "Set compatibility mode (6KRO) or gamepad mode. The keyboard restarts; gamepad mode changes its USB identity.", params: obj(json!({"compat_mode": {"type": "boolean"}, "gamepad_mode": {"type": "boolean"}}), &[]) },
         MethodInfo { name: "settings.global.get", description: "Global settings (RGB power saving timers).", params: obj(json!({}), &[]) },
-        MethodInfo { name: "settings.global.set", description: "Set RGB power saving: minutes until the lighting dims and until it turns off (0 = never).", params: obj(json!({"dim_after_minutes": {"type": "integer"}, "off_after_minutes": {"type": "integer"}}), &[]) },
+        MethodInfo { name: "settings.global.set", description: "Device-wide settings: RGB power saving minutes (0 = never), inverted Num Lock indicator, debounce filter.", params: obj(json!({"dim_after_minutes": {"type": "integer"}, "off_after_minutes": {"type": "integer"}, "numlock_inverted": {"type": "boolean"}, "debounce_filter": {"type": "boolean"}}), &[]) },
         MethodInfo { name: "keymap.get", description: "Key mapping of a layer (0 = main, 1/2 = Fn layers) as {key_id: code_name} plus the raw matrix. slot defaults to the active profile.", params: obj(json!({"layer": {"type": "integer", "minimum": 0, "maximum": 3}, "slot": {"type": "integer"}}), &[]) },
         MethodInfo { name: "keymap.set_key", description: "Remap one key: code is a key name from keycodes.list (e.g. \"esc\", \"f5\", \"lctrl\", \"none\"). Applies live to the active profile; persist=true also writes flash.", params: obj(json!({"key": {"type": "string"}, "code": {"type": "string"}, "layer": {"type": "integer", "minimum": 0, "maximum": 3}, "persist": {"type": "boolean"}}), &["key", "code"]) },
         MethodInfo { name: "keymap.set", description: "Remap several keys at once: {\"keys\": {\"capslock\": \"esc\", \"esc\": \"grave\"}}.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": "string"}}, "layer": {"type": "integer"}, "persist": {"type": "boolean"}}), &["keys"]) },
@@ -99,6 +107,7 @@ pub fn methods() -> Vec<MethodInfo> {
         MethodInfo { name: "keycodes.list", description: "All key code names accepted by keymap.set_key.", params: obj(json!({}), &[]) },
         MethodInfo { name: "advanced_keys.get", description: "Advanced keys (mod-tap) of a profile slot (default: active): key id, hold action, tap action.", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
         MethodInfo { name: "advanced_keys.set_mod_tap", description: "Make a key a mod-tap: 'hold' is sent while held, 'tap' when tapped (key code names). Written to the active profile.", params: obj(json!({"key": {"type": "string"}, "hold": {"type": "string"}, "tap": {"type": "string"}}), &["key", "hold", "tap"]) },
+        MethodInfo { name: "advanced_keys.set", description: "Add or replace an advanced key. kind=mod_tap {tap,hold} | toggle {code} | rappy_snappy {other_key} | socd {other_key, mode} | dks {codes:[4 names], masks:[4 ints]?}. Written to the active profile.", params: obj(json!({"key": {"type": "string"}, "kind": {"type": "string", "enum": ["mod_tap", "toggle", "rappy_snappy", "socd", "dks"]}, "tap": {"type": "string"}, "hold": {"type": "string"}, "code": {"type": "string"}, "other_key": {"type": "string"}, "mode": {"type": "integer"}, "codes": {"type": "array", "items": {"type": "string"}}, "masks": {"type": "array", "items": {"type": "integer"}}}), &["key", "kind"]) },
         MethodInfo { name: "advanced_keys.remove", description: "Remove the advanced-key entry from a key.", params: obj(json!({"key": {"type": "string"}}), &["key"]) },
         MethodInfo { name: "profile.rename", description: "Rename a profile slot and/or set its badge colour.", params: obj(json!({"slot": {"type": "integer"}, "name": {"type": "string"}, "color": color}), &["slot"]) },
         MethodInfo { name: "profile.delete", description: "Delete an onboard profile slot. Irreversible; needs confirm=true.", params: obj(json!({"slot": {"type": "integer"}, "confirm": {"type": "boolean"}}), &["slot"]) },
@@ -329,7 +338,10 @@ impl Api {
                     if let Some(v) = patch.get("off_after_minutes").and_then(Value::as_u64) { ps.off_after_minutes = Some(v as u32); }
                     ps.dim_after_minutes.get_or_insert(0);
                     ps.off_after_minutes.get_or_insert(0);
-                    g.flags.get_or_insert(0);
+                    if let Some(v) = patch.get("numlock_inverted").and_then(Value::as_bool) { g.numlock_inverted = Some(v as u32); }
+                    if let Some(v) = patch.get("debounce_filter").and_then(Value::as_bool) { g.debounce_filter = Some(v as u32); }
+                    g.numlock_inverted.get_or_insert(0);
+                    g.debounce_filter.get_or_insert(0);
                     kb.set_global_settings(&g)?;
                     Ok(serde_json::to_value(kb.global_settings()?).unwrap())
                 }).map_err(Into::into)
@@ -400,6 +412,97 @@ impl Api {
                 let hold = p.keycode("hold")?;
                 let tap = p.keycode("tap")?;
                 self.with_keyboard(|kb| Ok(json!({"entries": kb.set_mod_tap(&key, tap, hold)?}))).map_err(Into::into)
+            }
+            "advanced_keys.set" => {
+                let key = p.string("key")?;
+                let kind = p.string("kind")?;
+                let params = p.0.clone();
+                self.with_keyboard(|kb| {
+                    let entry = match kind.as_str() {
+                        "mod_tap" => Keyboard::akc_mod_tap(Params(params.clone()).keycode("tap")?, Params(params.clone()).keycode("hold")?),
+                        "toggle" => Keyboard::akc_toggle(Params(params.clone()).keycode("code")?),
+                        "rappy_snappy" => kb.akc_rappy_snappy(&Params(params.clone()).string("other_key")?)?,
+                        "socd" => kb.akc_socd(&Params(params.clone()).string("other_key")?, params.get("mode").and_then(Value::as_u64).unwrap_or(1) as u32)?,
+                        "dks" => {
+                            let names = params.get("codes").and_then(Value::as_array).ok_or_else(|| ApiError::invalid("dks needs codes"))?;
+                            let mut codes = [0xffu8; 4];
+                            for (i, n) in names.iter().take(4).enumerate() {
+                                let s = n.as_str().unwrap_or("none");
+                                codes[i] = keycode::parse(s).ok_or_else(|| ApiError::invalid(format!("unknown key code {s:?}")))?;
+                            }
+                            let masks = params.get("masks").and_then(Value::as_array).map(|m| {
+                                let mut out = [0u8; 4];
+                                for (i, v) in m.iter().take(4).enumerate() { out[i] = v.as_u64().unwrap_or(0) as u8; }
+                                out
+                            });
+                            Keyboard::akc_dks(codes, masks)
+                        }
+                        other => return Err(ApiError::invalid(format!("unknown kind {other:?}")).into()),
+                    };
+                    Ok(json!({"entries": kb.set_advanced_key(&key, entry)?}))
+                }).map_err(Into::into)
+            }
+            "actuation.keys.get" => {
+                let slot = p.opt_u8("slot")?;
+                self.with_keyboard(|kb| {
+                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
+                    let m: serde_json::Map<String, Value> = kb.per_key_actuation(slot)?.into_iter().map(|(k, mm)| (k, json!(mm))).collect();
+                    Ok(json!({"slot": slot, "keys": m}))
+                }).map_err(Into::into)
+            }
+            "actuation.keys.set" => {
+                let map = p.0.get("keys").and_then(Value::as_object).ok_or_else(|| ApiError::invalid("keys must be an object"))?;
+                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
+                let changes: Vec<(String, Option<f32>)> = map.iter().map(|(k, v)| (k.clone(), v.as_f64().map(|f| f as f32))).collect();
+                self.with_keyboard(|kb| {
+                    let slot = kb.active_profile()?;
+                    let m: serde_json::Map<String, Value> = kb.set_per_key_actuation(&changes, persist.then_some(slot))?.into_iter().map(|(k, mm)| (k, json!(mm))).collect();
+                    Ok(json!({"slot": slot, "keys": m, "persisted": persist}))
+                }).map_err(Into::into)
+            }
+            "rapid_trigger.keys.get" => {
+                let slot = p.opt_u8("slot")?;
+                self.with_keyboard(|kb| {
+                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
+                    Ok(json!({"slot": slot, "keys": kb.rt_keys(slot)?}))
+                }).map_err(Into::into)
+            }
+            "rapid_trigger.keys.set" => {
+                let map = p.0.get("keys").and_then(Value::as_object).ok_or_else(|| ApiError::invalid("keys must be an object"))?;
+                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
+                let changes: Vec<(String, bool)> = map.iter().map(|(k, v)| (k.clone(), v.as_bool().unwrap_or(false))).collect();
+                self.with_keyboard(|kb| {
+                    let slot = kb.active_profile()?;
+                    Ok(json!({"slot": slot, "keys": kb.set_rt_keys(&changes, persist.then_some(slot))?, "persisted": persist}))
+                }).map_err(Into::into)
+            }
+            "rgb.effects.get" => {
+                let slot = p.opt_u8("slot")?;
+                self.with_keyboard(|kb| {
+                    let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
+                    let core = kb.rgb_core(slot)?;
+                    Ok(json!({"slot": slot, "brightness": core.payload.as_ref().and_then(|p| p.brightness), "layers": core.effects.map(|e| e.layers).unwrap_or_default()}))
+                }).map_err(Into::into)
+            }
+            "rgb.effects.set" => {
+                let layers: Vec<pb::EffectLayer> = serde_json::from_value(p.0.get("layers").cloned().unwrap_or(json!([]))).map_err(|e| ApiError::invalid(format!("layers: {e}")))?;
+                let brightness = p.opt_u8("brightness")?;
+                let persist = p.0.get("persist").and_then(Value::as_bool).unwrap_or(false);
+                self.with_keyboard(|kb| {
+                    let slot = kb.active_profile()?;
+                    let core = kb.set_rgb_core(Some(pb::Effects { layers }), brightness, persist.then_some(slot))?;
+                    Ok(json!({"slot": slot, "brightness": core.payload.as_ref().and_then(|p| p.brightness), "layers": core.effects.map(|e| e.layers).unwrap_or_default(), "persisted": persist}))
+                }).map_err(Into::into)
+            }
+            "settings.device.get" => self.with_keyboard(|kb| Ok(json!({"compat_mode": kb.compat_mode()?, "gamepad_mode": kb.gamepad_mode()?, "raw": kb.device_config()?}))).map_err(Into::into),
+            "settings.device.set" => {
+                let compat = p.0.get("compat_mode").and_then(Value::as_bool);
+                let gamepad = p.0.get("gamepad_mode").and_then(Value::as_bool);
+                self.with_keyboard(|kb| {
+                    if let Some(c) = compat { kb.set_compat_mode(c)?; }
+                    if let Some(g) = gamepad { kb.set_gamepad_mode(g)?; }
+                    Ok(json!({"ok": true, "restarting": compat.is_some() || gamepad.is_some()}))
+                }).map_err(Into::into)
             }
             "advanced_keys.remove" => {
                 let key = p.string("key")?;

@@ -88,3 +88,77 @@ feature  d1 da 3f 03                     cmd 63: delete slot 3
 ## Advanced keys (0x18) — the user's mod-tap keys
 `0a 0b 12 04 08 4f 10 68 40 8d 01 48 00` ×5: entry{ 2: modtap{ 1: tap_code 0x4f, 2: hold_code 0x68 }, 8: 141, 9: 0 }.
 Pairs seen: (4f,68) (4d,77) (4e,67) (4c,e7) (36,e7). Trailer `10 00 18 05` = count 5.
+
+# Session 2 (2026-10-27, temp profile in slot 3) — feature parity captures
+
+## Per-key actuation (report 0x15)
+Setting key A to 2.5 mm: `d1 da 15 00 08 00 | 22 06 08 e1 80 fc bf 06` →
+`PerKey { repeated Entry actuation = 4 }`, `Entry { uint32 packed = 1 }` with
+`packed = (actuation_code << 16) | matrix_id` (0x67FF << 16 | 0x61).
+
+## Per-key rapid trigger (report 0x1D)
+Enabling RT on key S: `d1 da 1d 00 06 00 | 0a 04 08 62 18 01` →
+`RtKeys { Keys keys = 1 { repeated uint32 key = 1 }; uint32 enabled = 3 }`.
+The Typing profile ships `0a 0a 08 42 08 61 08 62 08 63 18 01` (W A S D).
+Sensitivities stay in KeyboardProfile (global). Every KeyboardProfile write
+is preceded by this report with the same flags.
+
+## Continuous rapid trigger
+KeyboardProfile field 7: 1 = RT ends at the actuation point, 0 = continuous.
+
+## Key codes recovered (drop tile → save → diff layer 0)
+mouse_left d8, mouse_right d9, mouse_middle da, mouse_back db, mouse_forward dc;
+media_player c6, mail c7, calculator c8, file_explorer c9, search ca, www cb,
+browser_back cc, browser_forward cd, stop ce, refresh cf, bookmark d0, power d1,
+sleep d2, (d3 unused?), screen_switch d4, app_grid d5, display_brightness_down d6,
+display_brightness_up d7; F13–F24 = 6b–76; profile_1 e5, key_lock e8, fn3 eb,
+profile_cycle ec, ime_on ed, ime_off ee, lang3 ef, lang4 f0, lang5 f1, ro f2,
+kana f3, yen f4, henkan (Conv) f5, muhenkan (Non-conv) f6. Fn Lock is disabled
+in Wootility for this board. A fourth mapping layer (Fn Layer 3) appears once
+an `fn3` key exists.
+
+## Advanced keys (0x18) entry kinds
+```
+Rappy Snappy  0a 0a 22 04 08 63 10 00 40 61 48 00      Entry{4: {1: other_key=D, 2: 0}, 8: key=A}
+SOCD          0a 0d 2a 07 08 a2 01 10 00 18 01 40 40 48 00   Entry{5: {1: other=L-Alt, 2: 0, 3: mode=1}, 8: Tab}
+DKS           0a 12 0a 0c 0a 04 17 64 ff ff 12 04 a9 a4 a8 aa 40 42 48 00
+                 Entry{1: {1: codes[4]=[W, LShift, -, -], 2: masks[4]=[a9 a4 a8 aa]}, 8: W}
+Mod-tap       0a 0b 12 04 08 4f 10 68 40 8d 01 48 00   Entry{2: {1: tap, 2: hold}, 8: key}
+Toggle        0a 09 1a 03 08 ea 01 40 60 48 00          Entry{3: {1: code=fn2}, 8: Caps}
+```
+Trailer `10 00 18 <count>`; saved with `SaveAkcProfile(p3 = slot)` after a
+flags-0 write.
+
+## RGB effects (RgbProfileCore field 4 = Effects { repeated Layer layers = 1 })
+Layer oneof by field number: 1 wave `{look, speed(×4 s), direction}`,
+2 scan `{width, speed, base_brightness, direction}`, 3 breath `{1: 15, 3: 0}`,
+4 cycle `{look, speed}`, 5 ripple `{1:0, 2:20, 3:30, 4:30}`, 6 trail
+`{1:30, 2:4, 3:0, 4:0xFFFF}`, 7 touch `{1:30, 2:0, 3:0, 4:0, 5:1}`, 8 jelly
+`{1:30, 2:0}`, 9 aoe `{1:30, 2:0}`, 10 mixing `{1:0}`, 11 rt_display `{1:140}`,
+14 noise `{colour1 RGB565, colour2 RGB565, 3:50, 4:25}`, 15 spiral
+`{colour1, colour2, 3:100, 4:139}`. The first layer is the base effect
+(Static = no layers); extra "RGB Fx layers" append layers. Presets write
+colour rows (0x0E/0x0F) only.
+
+## Global / device settings
+- Num Lock inverted: GlobalSettings field 2 = 1.
+- Debounce filter: GlobalSettings field 3 = 1.
+- Compatibility mode (6KRO): DeviceConfig (0x07, raw) byte 0 = 0x10 on / 0x00 off,
+  followed by `SoftReset` (25); Wootility then re-reads everything.
+- Gamepad enable: DeviceConfig byte 6 = 0x08 (0x0C = off), then SoftReset; the
+  keyboard re-enumerates as PID 0x1320 (gamepad composite) and WebHID needs a
+  new permission. Disable by writing 0x0C and resetting.
+
+## Profiles
+- "Set as Default" and drag-reorder are **swaps**: Wootility rewrites both
+  slots completely (all reports with `(slot<<1)|1` flags, RGB rows + `SaveRgbProfile`,
+  0x1B blobs, AKC + `SaveAkcProfile`, metadata) and activates slot 0. The
+  default profile is always slot 0.
+- Full profile read sequence used by Wootility after a reset (all with p3 = slot):
+  `GetVersion`, `GetSerial`(0/1/2/3), 59, 62, 72(slot), 81, 11, 83 (switch table),
+  82 (`12 02 08 00 18 01`), 51, 50, 35, 36, 57(slot,1), 39, 54, 61, 41 (analog
+  curve = report 0x13), 40, 48 (layers 0..3), 49, 52, 55.
+
+## 0x1B blobs
+Four 510-byte chunks, flags `chunk<<5 | slot-ish`; carry RGB565-looking data
+for extra RGB layers. Kept opaque.

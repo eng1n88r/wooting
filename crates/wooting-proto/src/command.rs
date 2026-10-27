@@ -89,9 +89,14 @@ commands! {
     // 63/64/72 seen from Wootility v5.4 (p3 = slot); 73/74 are its polling commands.
     DeleteProfile = 63,
     CreateProfile = 64,
+    GetRtKeys = 61,
+    GetProfileCount = 62,
     PostSaveProfile = 72,
     Poll73 = 73,
     AnalogReport = 74,
+    Cmd81 = 81,
+    GetDefaultProfile = 82,
+    GetSwitchTable = 83,
 }
 
 impl Command {
