@@ -20,11 +20,9 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     g1.add(&compat);
     let numlock = adw::ComboRow::builder()
         .title("Num Lock indicator behaviour")
+        .subtitle("Regular: the numpad types numbers while the indicator is on. Inverted: it types numbers while the indicator is off.")
         .build();
-    numlock.set_model(Some(&gtk::StringList::new(&[
-        "Regular: input numbers when the indicator is on",
-        "Inverted: input numbers when the indicator is off",
-    ])));
+    numlock.set_model(Some(&gtk::StringList::new(&["Regular", "Inverted"])));
     g1.add(&numlock);
     page.append(&g1);
 
