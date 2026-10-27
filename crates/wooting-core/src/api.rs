@@ -416,7 +416,7 @@ fn mapping_json(kb: &Keyboard, slot: u8, layer: u8, rows: &[[u8; COLS]; ROWS], s
     let keys: serde_json::Map<String, Value> = kb
         .mapping_by_key(rows)
         .into_iter()
-        .map(|(id, code, name)| (id, json!({"code": code, "name": name})))
+        .map(|(id, code, name)| (id, json!({"code": code, "name": name, "label": keycode::label(code)})))
         .collect();
     json!({"slot": slot, "layer": layer, "stored": stored, "keys": keys, "rows": rows.iter().map(|r| r.to_vec()).collect::<Vec<_>>()})
 }

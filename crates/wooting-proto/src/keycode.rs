@@ -40,6 +40,37 @@ pub const KEYCODES: &[(u8, &str)] = &[
 
 pub const NONE: u8 = 0xff;
 
+/// Short keycap-style label for a code (`"["`, `"Shift"`, `"F5"`, `"↑"`).
+pub fn label(code: u8) -> String {
+    let n = name(code);
+    let fixed = match n.as_str() {
+        "minus" => "-", "equal" => "=", "lbracket" => "[", "rbracket" => "]",
+        "backslash" | "nonus_backslash" => "\\", "nonus_hash" => "#", "semicolon" => ";",
+        "quote" => "'", "grave" => "`", "comma" => ",", "period" => ".", "slash" => "/",
+        "esc" => "Esc", "enter" => "Enter", "backspace" => "Bksp", "tab" => "Tab",
+        "space" => "Space", "capslock" => "Caps", "lshift" | "rshift" => "Shift",
+        "lctrl" | "rctrl" => "Ctrl", "lalt" | "ralt" => "Alt", "lgui" | "rgui" => "Super",
+        "menu" | "application" => "Menu", "fn1" => "Fn", "fn2" => "Fn2",
+        "up" => "↑", "down" => "↓", "left" => "←", "right" => "→",
+        "pageup" => "PgUp", "pagedown" => "PgDn", "home" => "Home", "end" => "End",
+        "insert" => "Ins", "delete" => "Del", "printscreen" => "PrtSc", "scrolllock" => "ScrLk",
+        "pause" => "Pause", "numlock" => "NumLk", "kp_enter" => "KP⏎", "kp_slash" => "KP/",
+        "kp_asterisk" => "KP*", "kp_minus" => "KP-", "kp_plus" => "KP+", "kp_period" => "KP.",
+        "none" => "—",
+        _ => "",
+    };
+    if !fixed.is_empty() {
+        return fixed.to_string();
+    }
+    if let Some(d) = n.strip_prefix("kp_") {
+        return format!("KP{d}");
+    }
+    if n.len() == 1 || n.starts_with('f') && n[1..].chars().all(|c| c.is_ascii_digit()) {
+        return n.to_ascii_uppercase();
+    }
+    n
+}
+
 pub fn name(code: u8) -> String {
     KEYCODES
         .iter()
@@ -90,5 +121,10 @@ mod tests {
         assert_eq!(parse("0x77"), Some(0x77));
         assert_eq!(name(0x68), "rshift");
         assert_eq!(name(0x99), "0x99");
+        assert_eq!(label(0x2c), "[");
+        assert_eq!(label(0x3b), "F5");
+        assert_eq!(label(0x01), "A");
+        assert_eq!(label(0x4f), "↑");
+        assert_eq!(label(0x5a), "KP5");
     }
 }

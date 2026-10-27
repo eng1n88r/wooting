@@ -380,7 +380,8 @@ fn keymap_page(ctx: &Ctx) -> gtk::Widget {
             st.codes.clear();
             if let Some(keys) = v["keys"].as_object() {
                 for (id, k) in keys {
-                    st.codes.insert(id.clone(), k["name"].as_str().unwrap_or("?").to_string());
+                    let label = k["label"].as_str().or_else(|| k["name"].as_str()).unwrap_or("?");
+                    st.codes.insert(id.clone(), label.to_string());
                 }
             }
             drop(st);
