@@ -53,9 +53,23 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     let pressed = gtk::Label::new(Some("Pressed key: —"));
     pressed.set_xalign(0.0);
     fb.append(&pressed);
-    let level = gtk::LevelBar::for_interval(0.0, 255.0);
+    let level = gtk::LevelBar::for_interval(0.0, 4.0);
     level.set_hexpand(true);
     fb.append(&level);
+    let ticks = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    for (i, t) in ["0 mm", "1.00 mm", "2.00 mm", "3.00 mm", "4.00 mm"].iter().enumerate() {
+        let l = gtk::Label::new(Some(t));
+        l.add_css_class("dim-label");
+        l.add_css_class("caption");
+        l.set_hexpand(true);
+        l.set_xalign(match i {
+            0 => 0.0,
+            4 => 1.0,
+            _ => 0.5,
+        });
+        ticks.append(&l);
+    }
+    fb.append(&ticks);
     row.append(&fb_card);
     page.append(&row);
 
@@ -169,8 +183,21 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
                     c.view.area.queue_draw();
                     match best {
                         Some((k, a)) => {
-                            pl.set_text(&format!("Pressed key: {k}"));
-                            lv.set_value(a as f64);
+                            let mm = a as f64 / 255.0 * 4.0;
+                            let st = c.view.state.borrow();
+                            let label = st
+                                .layout
+                                .as_ref()
+                                .and_then(|l| l.key(&k))
+                                .map(|key| key.label.clone())
+                                .unwrap_or_else(|| k.clone());
+                            let point = st.values.get(&k).cloned();
+                            drop(st);
+                            pl.set_text(&match point {
+                                Some(p) => format!("Pressed key: {label} · {mm:.2} mm (actuates at {p} mm)"),
+                                None => format!("Pressed key: {label} · {mm:.2} mm"),
+                            });
+                            lv.set_value(mm);
                         }
                         None => {
                             pl.set_text("Pressed key: —");
