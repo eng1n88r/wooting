@@ -117,5 +117,4 @@ woot links add --class cs2 "Rapid Profile"                 woot backup   woot me
   presets and points, anti-deadzone, angle / square / snappy joystick),
   linked profiles via Hyprland, daemon, HTTP, MCP, CLI, GTK app.
 - Protocol notes and the Wootility captures they came from: `docs/`.
-- Not yet: "Classic" controller button codes, firmware updates, Wooting
-  cloud features.
+- Not yet: firmware updates, Wooting cloud features.

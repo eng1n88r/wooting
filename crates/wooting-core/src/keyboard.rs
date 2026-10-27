@@ -702,6 +702,20 @@ impl Keyboard {
         })
     }
 
+    /// DeviceConfig read twice: right after a restart the keyboard can answer
+    /// with stale bytes, which must never be written back.
+    fn device_config_stable(&self) -> Result<Vec<u8>> {
+        let a = self.device_config()?;
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let b = self.device_config()?;
+        if a != b || a.len() < 7 {
+            return Err(Error::Other(
+                "the keyboard is still restarting; try again in a moment".into(),
+            ));
+        }
+        Ok(a)
+    }
+
     /// Write every device flag at once (one restart). `None` keeps a value.
     pub fn set_device_settings(
         &self,
@@ -710,8 +724,7 @@ impl Keyboard {
         polling_hz: Option<u32>,
         controller: Option<&str>,
     ) -> Result<()> {
-        let mut cfg = self.device_config()?;
-        cfg.resize(7, 0);
+        let mut cfg = self.device_config_stable()?;
         let set = |b: &mut u8, mask: u8, on: bool| if on { *b |= mask } else { *b &= !mask };
         if let Some(c) = compat {
             set(&mut cfg[0], 0x10, c);
@@ -741,20 +754,15 @@ impl Keyboard {
     fn write_device_config(&self, mut cfg: Vec<u8>) -> Result<()> {
         cfg.resize(7, 0);
         cfg[4] = 0;
-        let bytes = report::build_raw(
-            self.t.protocol(),
-            report::kind::DEVICE_CONFIG,
-            FLAGS_RAM,
-            &cfg,
-        )
-        .ok_or_else(|| Error::Other("device config too large".into()))?;
+        let bytes = report::build_raw(self.t.protocol(), report::kind::DEVICE_CONFIG, &cfg)
+            .ok_or_else(|| Error::Other("device config too large".into()))?;
         self.t.write_report(&bytes)?;
         let _ = self.t.send(Command::SoftReset, [0; 4]);
         Ok(())
     }
 
     pub fn set_compat_mode(&self, on: bool) -> Result<()> {
-        let mut cfg = self.device_config()?;
+        let mut cfg = self.device_config_stable()?;
         cfg.resize(7, 0);
         if on {
             cfg[0] |= 0x10
@@ -767,7 +775,7 @@ impl Keyboard {
     /// Gamepad mode makes the keyboard re-enumerate as a different USB
     /// product (0x1320); the daemon reconnects afterwards.
     pub fn set_gamepad_mode(&self, on: bool) -> Result<()> {
-        let mut cfg = self.device_config()?;
+        let mut cfg = self.device_config_stable()?;
         cfg.resize(7, 0);
         if on {
             cfg[6] &= !0x04

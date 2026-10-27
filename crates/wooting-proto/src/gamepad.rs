@@ -1,8 +1,41 @@
-//! Gamepad button codes and analog-curve presets (Wootility v5.4, Xbox
-//! controller layout). A mapped key is stored as `(code << 8) | matrix_id`
-//! in the `GamepadMapping` report.
+//! Gamepad button codes and analog-curve presets (Wootility v5.4). A mapped
+//! key is stored as `(code << 8) | matrix_id` in the `GamepadMapping`
+//! report. The code's meaning depends on the controller type selected in
+//! DeviceConfig: Xbox (PID 0x1320) or "Classic" (PID 0x1321, a generic
+//! HID joystick with 12 buttons and 6 axes).
 
 use crate::pb;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Controller {
+    #[default]
+    Xbox,
+    Classic,
+}
+
+impl Controller {
+    pub fn parse(s: &str) -> Option<Controller> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "xbox" => Some(Controller::Xbox),
+            "classic" => Some(Controller::Classic),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Controller::Xbox => "xbox",
+            Controller::Classic => "classic",
+        }
+    }
+
+    pub fn table(self) -> &'static [(&'static str, &'static str, u8)] {
+        match self {
+            Controller::Xbox => BUTTONS,
+            Controller::Classic => BUTTONS_CLASSIC,
+        }
+    }
+}
 
 /// `(name, label, code)` for every Xbox-controller button Wootility offers.
 pub const BUTTONS: &[(&str, &str, u8)] = &[
@@ -33,6 +66,83 @@ pub const BUTTONS: &[(&str, &str, u8)] = &[
     ("rt", "RT", 0x90),
 ];
 
+/// `(name, label, code)` for the "Classic Controller" palette (generic
+/// joystick: 12 buttons, X/Y/Z axes, X/Y/Z rotations, throttle & co, hat).
+pub const BUTTONS_CLASSIC: &[(&str, &str, u8)] = &[
+    ("button1", "1", 0x78),
+    ("button2", "2", 0x79),
+    ("button3", "3", 0x7A),
+    ("button4", "4", 0x7B),
+    ("button5", "5", 0x7C),
+    ("button6", "6", 0x7D),
+    ("button7", "7", 0x7E),
+    ("button8", "8", 0x7F),
+    ("button9", "9", 0x80),
+    ("button10", "10", 0x81),
+    ("button11", "11", 0x82),
+    ("button12", "12", 0x83),
+    ("y_up", "Y ↑", 0x85),        // Y axis up (joystick 1 up)
+    ("y_down", "Y ↓", 0x86),      // Y axis down (joystick 1 down)
+    ("x_left", "X ←", 0x87),      // X axis left (joystick 1 left)
+    ("x_right", "X →", 0x88),     // X axis right (joystick 1 right)
+    ("yrot_up", "Yr ↑", 0x89),    // Y rotation up
+    ("yrot_down", "Yr ↓", 0x8A),  // Y rotation down
+    ("xrot_left", "Xr ←", 0x8B),  // X rotation left
+    ("xrot_right", "Xr →", 0x8C), // X rotation right
+    ("throttle", "TH", 0x8F),
+    ("elevator", "E", 0x90),
+    ("accelerator", "A", 0x91),
+    ("rudder", "R", 0x92),
+    ("trigger", "T", 0x93),
+    ("z_forward", "Z ←", 0x94),     // Z axis forward (joystick 2 left)
+    ("z_backward", "Z →", 0x95),    // Z axis backward (joystick 2 right)
+    ("zrot_forward", "Zr ↑", 0x96), // Z rotation forward (joystick 2 up)
+    ("zrot_back", "Zr ↓", 0x97),    // Z rotation back (joystick 2 down)
+    ("dpad_up", "D-pad ↑", 0x98),
+    ("dpad_down", "D-pad ↓", 0x99),
+    ("dpad_left", "D-pad ←", 0x9A),
+    ("dpad_right", "D-pad →", 0x9B),
+];
+
+pub fn name_for(code: u8, c: Controller) -> String {
+    c.table()
+        .iter()
+        .find(|(_, _, k)| *k == code)
+        .map(|(n, _, _)| n.to_string())
+        .unwrap_or_else(|| format!("0x{code:02x}"))
+}
+
+pub fn label_for(code: u8, c: Controller) -> String {
+    c.table()
+        .iter()
+        .find(|(_, _, k)| *k == code)
+        .map(|(_, l, _)| l.to_string())
+        .unwrap_or_else(|| format!("{code:02X}"))
+}
+
+/// Parse a button for controller `c`; names of the other controller type
+/// are accepted too (the code is what gets stored).
+pub fn parse_for(s: &str, c: Controller) -> Option<u8> {
+    let t = s.trim();
+    let lower = t.to_ascii_lowercase();
+    if let Some(hex) = lower.strip_prefix("0x") {
+        return u8::from_str_radix(hex, 16).ok();
+    }
+    let find = |tab: &[(&str, &str, u8)]| {
+        tab.iter()
+            .find(|(n, l, _)| {
+                *n == lower || l.eq_ignore_ascii_case(t) || n.replace('_', "-") == lower
+            })
+            .map(|(_, _, k)| *k)
+    };
+    let other = match c {
+        Controller::Xbox => Controller::Classic,
+        Controller::Classic => Controller::Xbox,
+    };
+    find(c.table()).or_else(|| find(other.table()))
+}
+
+/// Xbox button name (see [`name_for`] for the controller-aware variant).
 pub fn name(code: u8) -> String {
     BUTTONS
         .iter()
@@ -157,6 +267,16 @@ mod tests {
             m.encode_to_vec(),
             [0x0a, 0x06, 0x12, 0x04, 0x08, 0x82, 0xf1, 0x01, 0x10, 0x00]
         );
+    }
+
+    #[test]
+    fn classic_names() {
+        assert_eq!(parse_for("Throttle", Controller::Classic), Some(0x8F));
+        assert_eq!(parse_for("button12", Controller::Classic), Some(0x83));
+        assert_eq!(parse_for("a", Controller::Classic), Some(0x91)); // accelerator label
+        assert_eq!(parse_for("lt", Controller::Classic), Some(0x8F)); // Xbox name still accepted
+        assert_eq!(name_for(0x9B, Controller::Classic), "dpad_right");
+        assert_eq!(name_for(0x9B, Controller::Xbox), "0x9b");
     }
 
     #[test]

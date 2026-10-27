@@ -177,9 +177,16 @@ presets (x,y ×4): linear (0,20)(60,60)(194,195)(253,255); aggro
 (0,33)(63,114)(139,231)(253,255); slow (0,23)(128,63)(226,145)(253,255);
 smooth (0,26)(78,84)(199,174)(253,255); steep (0,26)(25,132)(192,135)(253,255);
 instant (0,255)(2,255)(192,255)(255,255); turbo (0,255)(1,255)(2,255)(3,255).
-Polling rate and controller type live in DeviceConfig (global); "Classic"
-mode needs its own WebHID permission in Wootility, so its button codes were
-not captured.
+Polling rate and controller type live in DeviceConfig (global). "Classic"
+controller (PID 0x1321, generic joystick) reuses the same code space with
+other meanings: buttons 1–12 0x78–0x83, Y axis up/down 0x85/0x86, X axis
+left/right 0x87/0x88, Y rotation up/down 0x89/0x8A, X rotation left/right
+0x8B/0x8C, throttle 0x8F, elevator 0x90, accelerator 0x91, rudder 0x92,
+trigger 0x93, Z axis forward/backward 0x94/0x95, Z rotation forward/back
+0x96/0x97, hat up/down/left/right 0x98–0x9B. Gamepad off = PID 0x1322 on fw
+2.14.2. DeviceConfig is written as `d1 da 07 <7 bytes>`: no flags and no
+length byte (an extra byte shifts every flag by one and silently corrupts
+the config).
 
 ## Commands beyond 59
 

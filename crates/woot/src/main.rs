@@ -471,6 +471,10 @@ enum RawCmd {
 }
 
 fn main() -> Result<()> {
+    // Behave like a normal CLI tool when piped into `head`: no panic on EPIPE.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)

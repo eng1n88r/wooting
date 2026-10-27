@@ -13,7 +13,7 @@ use std::{
     collections::HashMap,
     rc::Rc,
 };
-use wooting_proto::gamepad::{BUTTONS, CURVE_PRESETS};
+use wooting_proto::gamepad::{Controller, CURVE_PRESETS};
 
 /// Curve points shared between the drawing area and the loaders.
 type Curve = Rc<RefCell<Vec<(u32, u32)>>>;
@@ -76,15 +76,7 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
     tiles.set_row_spacing(4);
     tiles.set_homogeneous(true);
     tiles.set_halign(gtk::Align::Start);
-    for (name, label, _) in BUTTONS {
-        let b = gtk::Button::with_label(label);
-        b.add_css_class("keytile");
-        b.set_tooltip_text(Some(name));
-        let c = ctx.clone();
-        let n = name.to_string();
-        b.connect_clicked(move |_| assign(&c, Some(n.clone())));
-        tiles.insert(&b, -1);
-    }
+    let tiles_for: Rc<RefCell<Option<Controller>>> = Rc::new(RefCell::new(None));
     map.append(&tiles);
     let tools = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let unmap = gtk::Button::with_label("Remove from selected keys");
@@ -226,8 +218,13 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
 
     // ----- Loading ------------------------------------------------------------
     let key_buttons: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(HashMap::new()));
-    let labels: HashMap<&str, &str> = BUTTONS.iter().map(|(n, l, _)| (*n, *l)).collect();
-    let labels = Rc::new(labels);
+    let labels: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(
+        Controller::Xbox
+            .table()
+            .iter()
+            .map(|(n, l, _)| (n.to_string(), l.to_string()))
+            .collect(),
+    ));
     let c = ctx.clone();
     let ld = loading.clone();
     let w = (
@@ -250,6 +247,7 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
         key_buttons.clone(),
         labels.clone(),
     );
+    let (tiles_l, tiles_for_l, ctx_l) = (tiles.clone(), tiles_for.clone(), ctx.clone());
     let handlers: Rc<RefCell<Option<(glib::SignalHandlerId, glib::SignalHandlerId)>>> =
         Rc::new(RefCell::new(None));
     let hl = handlers.clone();
@@ -267,11 +265,36 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
             lbl.clone(),
             hl.clone(),
         );
+        let (tiles_l, tiles_for_l, ctx_l) = (tiles_l.clone(), tiles_for_l.clone(), ctx_l.clone());
         spawn(async move {
             let Some(v) = c.call("gamepad.get", json!({})).await else {
                 return;
             };
             ld.set(true);
+            let controller = v["controller"]
+                .as_str()
+                .and_then(Controller::parse)
+                .unwrap_or_default();
+            if *tiles_for_l.borrow() != Some(controller) {
+                while let Some(ch) = tiles_l.first_child() {
+                    tiles_l.remove(&ch);
+                }
+                for (name, label, _) in controller.table() {
+                    let b = gtk::Button::with_label(label);
+                    b.add_css_class("keytile");
+                    b.set_tooltip_text(Some(&name.replace('_', " ")));
+                    let c2 = ctx_l.clone();
+                    let n = name.to_string();
+                    b.connect_clicked(move |_| assign(&c2, Some(n.clone())));
+                    tiles_l.insert(&b, -1);
+                }
+                *tiles_for_l.borrow_mut() = Some(controller);
+                *lbl.borrow_mut() = controller
+                    .table()
+                    .iter()
+                    .map(|(n, l, _)| (n.to_string(), l.to_string()))
+                    .collect();
+            }
             if let Some(d) = v["device"].as_object() {
                 w.0.set_active(d["gamepad_mode"].as_bool().unwrap_or(false));
                 w.1.set_selected(if d["controller"].as_str() == Some("classic") {
@@ -298,9 +321,10 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
                         .collect()
                 })
                 .unwrap_or_default();
+            let lbl = lbl.borrow();
             let mut listed: Vec<String> = keys
                 .iter()
-                .map(|(k, b)| format!("{k} → {}", lbl.get(b.as_str()).copied().unwrap_or(b)))
+                .map(|(k, b)| format!("{k} → {}", lbl.get(b.as_str()).unwrap_or(b)))
                 .collect();
             listed.sort();
             w.5.set_text(&if listed.is_empty() {
@@ -312,12 +336,7 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
                 let mut st = c.view.state.borrow_mut();
                 st.badges = keys
                     .iter()
-                    .map(|(k, b)| {
-                        (
-                            k.clone(),
-                            lbl.get(b.as_str()).copied().unwrap_or(b).to_string(),
-                        )
-                    })
+                    .map(|(k, b)| (k.clone(), lbl.get(b.as_str()).unwrap_or(b).to_string()))
                     .collect();
             }
             c.view.area.queue_draw();
@@ -462,10 +481,11 @@ pub fn build(ctx: &Ctx) -> gtk::Widget {
                         let a = val.as_u64().unwrap_or(0) as u8;
                         st.analog.insert(k.clone(), a);
                         let kb = kbl.borrow();
+                        let lbl = lbl.borrow();
                         match kb.get(k) {
                             Some(b) => names.push(format!(
                                 "{} {}%",
-                                lbl.get(b.as_str()).copied().unwrap_or(b),
+                                lbl.get(b.as_str()).unwrap_or(b),
                                 (a as u32 * 100) / 255
                             )),
                             None => names.push(format!("{k} (no button)")),

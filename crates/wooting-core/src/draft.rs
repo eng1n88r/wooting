@@ -226,7 +226,8 @@ impl Draft {
         self.push_ram(kb)
     }
 
-    fn push_ram(&self, kb: &Keyboard) -> Result<()> {
+    /// Re-send the current state to RAM (used after a reconnect).
+    pub fn push_ram(&self, kb: &Keyboard) -> Result<()> {
         if kb.active_profile()? == self.slot {
             kb.write_profile(&self.data, WriteTarget::Ram)?;
         }
@@ -527,8 +528,13 @@ impl ProfileData {
 
     // ----- gamepad -----------------------------------------------------------
 
-    /// Keys mapped to controller buttons: `(key id, button name)`.
-    pub fn gamepad_buttons(&self, layout: &Layout) -> Vec<(String, String)> {
+    /// Keys mapped to controller buttons: `(key id, button name)`; names
+    /// follow the controller type (Xbox or Classic).
+    pub fn gamepad_buttons(
+        &self,
+        layout: &Layout,
+        controller: gamepad::Controller,
+    ) -> Vec<(String, String)> {
         self.gamepad_mapping
             .layer
             .as_ref()
@@ -539,7 +545,7 @@ impl ProfileData {
                     .map(|v| {
                         (
                             key_for_matrix(layout, (v & 0xff) as u8),
-                            gamepad::name((v >> 8) as u8),
+                            gamepad::name_for((v >> 8) as u8, controller),
                         )
                     })
                     .collect()

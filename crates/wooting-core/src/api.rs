@@ -124,9 +124,9 @@ pub fn methods() -> Vec<MethodInfo> {
         MethodInfo { name: "settings.device.get", description: "Hardware flags: compatibility mode (6KRO), gamepad mode, gamepad polling rate (250/1000 Hz) and controller type (xbox/classic).", params: obj(json!({}), &[]) },
         MethodInfo { name: "settings.device.set", description: "Set compatibility mode (6KRO), gamepad mode, gamepad polling rate or controller type. The keyboard restarts; gamepad mode / controller type change its USB identity (PID 0x1320 Xbox, 0x1321 Classic).", params: obj(json!({"compat_mode": {"type": "boolean"}, "gamepad_mode": {"type": "boolean"}, "polling_hz": {"type": "integer", "enum": [250, 1000]}, "controller": {"type": "string", "enum": ["xbox", "classic"]}}), &[]) },
         MethodInfo { name: "gamepad.get", description: "Gamepad setup of a profile: buttons mapped onto keys ({key_id: button}), override (mapped keys stop typing), keyboard_keys (mapped keys still type), analog curve (4 [x,y] points, 0..255; first y = anti-deadzone), preset name if the curve matches one, angle_enabled/angle (0..100 = 0..90°), square, snappy; plus the device flags.", params: obj(json!({"slot": slot}), &[]) },
-        MethodInfo { name: "gamepad.set", description: "Map controller buttons onto keys: {\"keys\": {\"z\": \"a\", \"x\": null}} (null removes), and/or set override / keyboard_keys. Button names: gamepad.buttons.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": ["string", "null"]}}, "override": {"type": "boolean"}, "keyboard_keys": {"type": "boolean"}, "slot": slot, "persist": persist}), &[]) },
+        MethodInfo { name: "gamepad.set", description: "Map controller buttons onto keys: {\"keys\": {\"z\": \"a\", \"x\": null}} (null removes), and/or set override / keyboard_keys. Button names depend on the controller type (Xbox: a, b, x, y, start, select, guide, dpad_*, lb, rb, lt, rt, ls_*, rs_*; Classic: button1..12, x_left/right, y_up/down, z_forward/backward, xrot_*, yrot_*, zrot_*, throttle, elevator, accelerator, rudder, trigger, dpad_*); see gamepad.buttons.", params: obj(json!({"keys": {"type": "object", "additionalProperties": {"type": ["string", "null"]}}, "override": {"type": "boolean"}, "keyboard_keys": {"type": "boolean"}, "slot": slot, "persist": persist}), &[]) },
         MethodInfo { name: "gamepad.curve.set", description: "Analog curve and joystick options: preset (linear|aggro|slow|smooth|steep|instant|turbo) or points [[x,y]×4], deadzone (0..255, y of the first point), angle_enabled, angle (0..100), square, snappy.", params: obj(json!({"preset": {"type": "string"}, "points": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}}, "deadzone": {"type": "integer"}, "angle_enabled": {"type": "boolean"}, "angle": {"type": "integer"}, "square": {"type": "boolean"}, "snappy": {"type": "boolean"}, "slot": slot, "persist": persist}), &[]) },
-        MethodInfo { name: "gamepad.buttons", description: "Controller button names, labels and codes, plus the curve presets.", params: obj(json!({}), &[]) },
+        MethodInfo { name: "gamepad.buttons", description: "Controller button names, labels and codes for the current controller type (plus both the xbox and classic tables) and the curve presets.", params: obj(json!({}), &[]) },
         MethodInfo { name: "settings.reset", description: "Reset ALL keyboard settings to factory (ResetSettings). Irreversible; needs confirm=true.", params: obj(json!({"confirm": {"type": "boolean"}}), &[]) },
         MethodInfo { name: "keymap.get", description: "Key mapping of a layer as {key_id: {code, name, label}} plus the raw matrix; stored=false means the factory default is in use.", params: obj(json!({"layer": layer, "slot": slot}), &[]) },
         MethodInfo { name: "keymap.set_key", description: "Remap one key: code is a key name from keycodes.list (e.g. \"esc\", \"f5\", \"lctrl\", \"mouse_left\", \"none\").", params: obj(json!({"key": {"type": "string"}, "code": {"type": "string"}, "layer": layer, "slot": slot, "persist": persist}), &["key", "code"]) },
@@ -152,7 +152,18 @@ pub struct Api {
     selector: Option<String>,
     kb: Mutex<Option<Keyboard>>,
     drafts: Mutex<HashMap<u8, Draft>>,
+    /// Set once a keyboard was open: a later open failure is then treated as
+    /// a restart in progress (gamepad mode, 6KRO, soft reset) and retried.
+    had_device: std::sync::atomic::AtomicBool,
+    /// When the keyboard was last told to restart; reopening waits it out.
+    restarted_at: Mutex<Option<std::time::Instant>>,
 }
+
+/// How long a soft reset takes before the keyboard answers sanely again.
+const RESTART_SETTLE: std::time::Duration = std::time::Duration::from_millis(2500);
+
+/// How long to wait for a keyboard that is re-enumerating after a restart.
+const RECONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 impl Api {
     pub fn new(selector: Option<String>) -> Api {
@@ -160,30 +171,85 @@ impl Api {
             selector,
             kb: Mutex::new(None),
             drafts: Mutex::new(HashMap::new()),
+            had_device: std::sync::atomic::AtomicBool::new(false),
+            restarted_at: Mutex::new(None),
+        }
+    }
+
+    /// Forget the handle after a restart-inducing write and remember when.
+    fn note_restart(&self) {
+        *self.restarted_at.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(std::time::Instant::now());
+        *self.kb.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        self.drafts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+    }
+
+    fn open(&self) -> Result<Keyboard> {
+        match &self.selector {
+            Some(s) => Keyboard::open_matching(s),
+            None => Keyboard::open_first(),
+        }
+    }
+
+    /// Open the keyboard; after a restart keep trying until it is back.
+    fn open_or_wait(&self) -> Result<Keyboard> {
+        use std::sync::atomic::Ordering;
+        let reconnecting = self.had_device.load(Ordering::Relaxed);
+        if let Some(t) = *self.restarted_at.lock().unwrap_or_else(|p| p.into_inner()) {
+            if let Some(left) = RESTART_SETTLE.checked_sub(t.elapsed()) {
+                std::thread::sleep(left);
+            }
+        }
+        let deadline = std::time::Instant::now() + RECONNECT_TIMEOUT;
+        loop {
+            match self.open().and_then(|kb| {
+                // Make sure the freshly enumerated device answers before use.
+                kb.cmd(Command::Ping, [0; 4])?;
+                Ok(kb)
+            }) {
+                Ok(kb) => {
+                    tracing::info!(
+                        model = kb.summary().model,
+                        path = kb.summary().path,
+                        "opened keyboard"
+                    );
+                    self.had_device.store(true, Ordering::Relaxed);
+                    return Ok(kb);
+                }
+                Err(e) if reconnecting && std::time::Instant::now() < deadline => {
+                    tracing::debug!(error = %e, "waiting for the keyboard to come back");
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+                Err(e) => return Err(e),
+            }
         }
     }
 
     /// Run `f` against the keyboard, (re)opening it on demand. A HID error
-    /// drops the handle so the next call reconnects.
-    pub fn with_keyboard<T>(&self, f: impl FnOnce(&mut Keyboard) -> Result<T>) -> Result<T> {
+    /// (typically the keyboard re-enumerating after a settings change) drops
+    /// the handle, waits for the device and runs `f` once more.
+    pub fn with_keyboard<T>(&self, mut f: impl FnMut(&mut Keyboard) -> Result<T>) -> Result<T> {
         let mut guard = self.kb.lock().unwrap_or_else(|p| p.into_inner());
-        if guard.is_none() {
-            let kb = match &self.selector {
-                Some(s) => Keyboard::open_matching(s)?,
-                None => Keyboard::open_first()?,
-            };
-            tracing::info!(model = kb.summary().model, "opened keyboard");
-            *guard = Some(kb);
-        }
-        let kb = guard.as_mut().expect("just opened");
-        match f(kb) {
-            Err(Error::Hid(e)) => {
-                tracing::warn!(error = %e, "hid error, dropping device handle");
-                *guard = None;
-                Err(Error::Hid(e))
+        for attempt in 0..2 {
+            if guard.is_none() {
+                *guard = Some(self.open_or_wait()?);
             }
-            other => other,
+            let kb = guard.as_mut().expect("just opened");
+            match f(kb) {
+                Err(Error::Hid(e)) => {
+                    tracing::warn!(error = %e, attempt, "hid error, dropping device handle");
+                    *guard = None;
+                    if attempt == 1 {
+                        return Err(Error::Hid(e));
+                    }
+                }
+                other => return other,
+            }
         }
+        unreachable!()
     }
 
     /// Current state of a slot: its draft if one exists, otherwise flash.
@@ -209,6 +275,9 @@ impl Api {
         persist: bool,
         f: impl FnOnce(&mut ProfileData, &Layout) -> Result<()>,
     ) -> Result<(u8, ProfileData, Layout, DraftStatus)> {
+        // The edit is pure (no I/O) so it runs once; a retry after a HID
+        // error reuses the already edited draft and just re-pushes it.
+        let mut f = Some(f);
         self.with_keyboard(|kb| {
             let slot = slot.map(Ok).unwrap_or_else(|| kb.active_profile())?;
             let layout = kb.layout().clone();
@@ -217,7 +286,10 @@ impl Api {
                 std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                 std::collections::hash_map::Entry::Vacant(e) => e.insert(Draft::load(kb, slot)?),
             };
-            d.edit(kb, |data| f(data, &layout))?;
+            match f.take() {
+                Some(f) => d.edit(kb, |data| f(data, &layout))?,
+                None => d.push_ram(kb)?,
+            }
             if persist {
                 d.save(kb)?;
             }
@@ -597,28 +669,43 @@ impl Api {
                 if !any {
                     return Err(ApiError::invalid("nothing to set"));
                 }
-                self.drafts.lock().unwrap_or_else(|p| p.into_inner()).clear();
-                self.with_keyboard(|kb| {
+                let r = self.with_keyboard(|kb| {
                     kb.set_device_settings(compat, gamepad, polling, controller.as_deref())?;
                     Ok(json!({"ok": true, "restarting": true}))
-                }).map_err(Into::into)
+                });
+                self.note_restart();
+                r.map_err(Into::into)
             }
             "gamepad.get" => {
                 let (slot, data, layout, st) = self.view(slot)?;
                 let device = self.with_keyboard(|kb| kb.device_settings()).ok();
                 Ok(gamepad_json(slot, &data, &layout, &st, device))
             }
+            "gamepad.buttons" => {
+                let device = self.with_keyboard(|kb| kb.device_settings()).ok();
+                let controller = device.as_ref().and_then(|d| gamepad::Controller::parse(&d.controller)).unwrap_or_default();
+                let list = |c: gamepad::Controller| c.table().iter().map(|(n, l, k)| json!({"name": n, "label": l, "code": k})).collect::<Vec<_>>();
+                Ok(json!({
+                    "controller": controller.as_str(),
+                    "buttons": list(controller),
+                    "xbox": list(gamepad::Controller::Xbox),
+                    "classic": list(gamepad::Controller::Classic),
+                    "presets": gamepad::CURVE_PRESETS.iter().map(|(n, p)| json!({"name": n, "points": p})).collect::<Vec<_>>(),
+                }))
+            }
             "gamepad.set" => {
                 let keys = p.0.get("keys").and_then(Value::as_object).cloned();
                 let override_keys = p.bool("override");
                 let keyboard_keys = p.bool("keyboard_keys");
+                let device = self.with_keyboard(|kb| kb.device_settings()).ok();
+                let controller = device.as_ref().and_then(|d| gamepad::Controller::parse(&d.controller)).unwrap_or_default();
                 let (slot, data, layout, st) = self.mutate(slot, persist, |d, l| {
                     if let Some(keys) = &keys {
                         let mut changes = Vec::new();
                         for (k, v) in keys {
                             let b = match v {
                                 Value::Null => None,
-                                Value::String(s) => Some(gamepad::parse(s).ok_or_else(|| ApiError::invalid(format!("unknown gamepad button {s:?}; see gamepad.buttons")))?),
+                                Value::String(s) => Some(gamepad::parse_for(s, controller).ok_or_else(|| ApiError::invalid(format!("unknown gamepad button {s:?}; see gamepad.buttons")))?),
                                 _ => return Err(ApiError::invalid("keys values must be button names or null").into()),
                             };
                             changes.push((k.clone(), b));
@@ -629,7 +716,7 @@ impl Api {
                     if let Some(k) = keyboard_keys { d.set_gamepad_keyboard_keys(k); }
                     Ok(())
                 })?;
-                Ok(gamepad_json(slot, &data, &layout, &st, None))
+                Ok(gamepad_json(slot, &data, &layout, &st, device))
             }
             "gamepad.curve.set" => {
                 let preset = p.opt_string("preset");
@@ -644,6 +731,7 @@ impl Api {
                 let angle = p.0.get("angle").and_then(Value::as_u64).map(|v| v as u32);
                 let square = p.bool("square");
                 let snappy = p.bool("snappy");
+                let device = self.with_keyboard(|kb| kb.device_settings()).ok();
                 let (slot, data, layout, st) = self.mutate(slot, persist, |d, _| {
                     if let Some(name) = &preset {
                         let pts = gamepad::preset(name).ok_or_else(|| ApiError::invalid(format!("unknown preset {name:?}")))?;
@@ -658,12 +746,8 @@ impl Api {
                     if let Some(n) = snappy { s.snappy = Some(n as u32); }
                     Ok(())
                 })?;
-                Ok(gamepad_json(slot, &data, &layout, &st, None))
+                Ok(gamepad_json(slot, &data, &layout, &st, device))
             }
-            "gamepad.buttons" => Ok(json!({
-                "buttons": gamepad::BUTTONS.iter().map(|(n, l, c)| json!({"name": n, "label": l, "code": c})).collect::<Vec<_>>(),
-                "presets": gamepad::CURVE_PRESETS.iter().map(|(n, p)| json!({"name": n, "points": p})).collect::<Vec<_>>(),
-            })),
             "settings.reset" => {
                 if !p.bool("confirm").unwrap_or(false) {
                     return Err(ApiError::invalid("resetting the keyboard is irreversible; pass confirm=true"));
@@ -802,8 +886,12 @@ fn gamepad_json(
     st: &DraftStatus,
     device: Option<crate::keyboard::DeviceSettings>,
 ) -> Value {
+    let controller = device
+        .as_ref()
+        .and_then(|d| gamepad::Controller::parse(&d.controller))
+        .unwrap_or_default();
     let keys: serde_json::Map<String, Value> = d
-        .gamepad_buttons(layout)
+        .gamepad_buttons(layout, controller)
         .into_iter()
         .map(|(k, b)| (k, Value::String(b)))
         .collect();
@@ -811,6 +899,7 @@ fn gamepad_json(
     let curve = d.gamepad_curve();
     json!({
         "slot": slot,
+        "controller": controller.as_str(),
         "keys": keys,
         "override": d.gamepad_override(),
         "keyboard_keys": d.gamepad_keyboard_keys(),

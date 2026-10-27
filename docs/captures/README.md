@@ -199,3 +199,10 @@ GamepadProfile report `output2 d1 da 13 00 28 00 | 0a 1c {4 points} 12 08 08 A 1
 read back with `GetGamepadMapping(40, p3=3)` =
 `0a 0a 12 08 0a 06 83 a1 02 82 f1 01 10 01` (firmware packs the list) and
 `GetGamepadProfile(41, p3=3)` = the aggro preset with angle on / 86.
+
+## Classic controller palette (same session, after approving PID 0x1321 in Brave)
+33 tiles dropped onto keys, two passes, read from the 0x12 reports:
+`e2 8e 02` = S ← 0x87 X axis left … `ed b6 02` = Enter ← 0x9B hat right. Names
+from the tile tooltips ("X Axis Left (Joystick 1 Left)", "Z Rotation Back
+(Joystick 2 Down)", "Throttle", "Elevator", "Accelerator", "Rudder",
+"Trigger", "Button 1"…). Table in `docs/protocol.md` / `gamepad.rs`.

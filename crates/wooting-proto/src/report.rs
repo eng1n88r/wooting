@@ -85,8 +85,10 @@ pub fn build_mapping(protocol: Protocol, flags: u8, layer: u8, payload: &[u8]) -
 }
 
 /// Build a raw (length-less) report such as DeviceConfig.
-pub fn build_raw(protocol: Protocol, report_type: u8, flags: u8, body: &[u8]) -> Option<Vec<u8>> {
-    frame(protocol, &[report_type, flags], body)
+/// Raw report without flags or length: `[type, body…]`. Used for
+/// DeviceConfig (0x07), which Wootility sends as `d1 da 07 <7 bytes>`.
+pub fn build_raw(protocol: Protocol, report_type: u8, body: &[u8]) -> Option<Vec<u8>> {
+    frame(protocol, &[report_type], body)
 }
 
 #[cfg(test)]
@@ -108,6 +110,14 @@ mod tests {
         assert_eq!(&m[..10], &[3, 0xD1, 0xDA, 0x14, 0x07, 0x01, 0, 0, 0x96, 0]);
         assert_eq!(m.len(), 255);
         assert!(build(Protocol::Arm, 0, 0, &[0; 3000]).is_none());
+        // DeviceConfig as captured: d1 da 07 10 00 00 00 00 00 0c (no flags, no length).
+        let d = build_raw(
+            Protocol::Arm,
+            kind::DEVICE_CONFIG,
+            &[0x10, 0, 0, 0, 0, 0, 0x0c],
+        )
+        .unwrap();
+        assert_eq!(&d[..11], &[1, 0xD1, 0xDA, 0x07, 0x10, 0, 0, 0, 0, 0, 0x0c]);
         assert_eq!(flags_persist(3), 7);
     }
 }
