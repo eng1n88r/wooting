@@ -44,6 +44,9 @@ pub const NONE: u8 = 0xff;
 /// Short keycap-style label for a code (`"["`, `"Shift"`, `"F5"`, `"↑"`);
 /// empty for an unmapped key.
 pub fn label(code: u8) -> String {
+    if code == NONE {
+        return String::new();
+    }
     let n = name(code);
     let fixed = match n.as_str() {
         "minus" => "-", "equal" => "=", "lbracket" => "[", "rbracket" => "]",
@@ -144,5 +147,6 @@ mod tests {
         assert_eq!(label(0xc2), "⏯");
         assert_eq!(label(0xe2), "P2");
         assert_eq!(label(0xe8), "E8");
+        assert_eq!(label(NONE), "");
     }
 }
