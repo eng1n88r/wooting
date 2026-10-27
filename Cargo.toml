@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/exbar/wooting"
+
+[workspace.dependencies]
+wooting-proto = { path = "crates/wooting-proto" }
+wooting-hid = { path = "crates/wooting-hid" }
+wooting-core = { path = "crates/wooting-core" }
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+hidapi = { version = "2", default-features = false, features = ["linux-native"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto = "thin"
+strip = true

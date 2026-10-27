@@ -1,0 +1,15 @@
+[package]
+name = "woot"
+description = "Command-line control for Wooting keyboards"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wooting-proto.workspace = true
+wooting-hid.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "wooting-proto"
+description = "Wire protocol for Wooting keyboards (pure, no I/O)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true

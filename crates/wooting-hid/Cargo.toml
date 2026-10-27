@@ -1,0 +1,13 @@
+[package]
+name = "wooting-hid"
+description = "Device discovery and HID transport for Wooting keyboards"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wooting-proto.workspace = true
+hidapi.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+tracing.workspace = true
