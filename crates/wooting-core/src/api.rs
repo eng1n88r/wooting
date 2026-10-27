@@ -85,6 +85,7 @@ pub fn methods() -> Vec<MethodInfo> {
         MethodInfo { name: "rgb.brightness.get", description: "Brightness (0-255) stored in an RGB profile slot.", params: obj(json!({"slot": {"type": "integer", "minimum": 0, "description": "RGB profile slot; default = active profile"}}), &[]) },
         MethodInfo { name: "rgb.brightness.set", description: "Set stored RGB profile brightness (0-255). Writes flash.", params: obj(json!({"value": {"type": "integer", "minimum": 0, "maximum": 255}, "slot": {"type": "integer", "minimum": 0}}), &["value"]) },
         MethodInfo { name: "rgb.profile.get", description: "Colours stored in an RGB profile slot (default: active profile).", params: obj(json!({"slot": {"type": "integer", "minimum": 0, "description": "RGB profile slot; default = active profile"}}), &[]) },
+        MethodInfo { name: "rgb.profile.set", description: "Write colours (6 rows of #rrggbb) and optionally brightness straight into an RGB profile slot (default: active). Writes flash.", params: obj(json!({"rows": {"type": "array", "items": {"type": "array", "items": {"type": ["string", "null"]}}}, "brightness": {"type": "integer"}, "slot": {"type": "integer"}}), &["rows"]) },
         MethodInfo { name: "rgb.save", description: "Persist the current direct-mode frame into an RGB profile slot (default: active profile) so it survives unplugging. Writes flash.", params: obj(json!({"slot": {"type": "integer", "minimum": 0, "description": "RGB profile slot; default = active profile"}}), &[]) },
         MethodInfo { name: "theme.apply", description: "Colour the keyboard from an Omarchy theme directory (default: the current theme). persist=true also saves it to the keyboard.", params: obj(json!({"dir": {"type": "string"}, "persist": {"type": "boolean"}}), &[]) },
         MethodInfo { name: "settings.get", description: "Actuation point, rapid trigger and Tachyon settings stored in a profile slot (default: active).", params: obj(json!({"slot": {"type": "integer"}}), &[]) },
@@ -241,6 +242,24 @@ impl Api {
                     let mut v = frame_json(&kb.read_rgb_profile(slot)?);
                     v["slot"] = slot.into();
                     Ok(v)
+                }).map_err(Into::into)
+            }
+            "rgb.profile.set" => {
+                let rows = p.0.get("rows").and_then(Value::as_array).ok_or_else(|| ApiError::invalid("rows must be an array"))?;
+                let mut frame = Frame::default();
+                for (r, row) in rows.iter().take(ROWS).enumerate() {
+                    for (c, v) in row.as_array().into_iter().flatten().take(COLS).enumerate() {
+                        if let Some(s) = v.as_str() {
+                            frame.set(r, c, Rgb::parse_hex(s).ok_or_else(|| ApiError::invalid(format!("bad colour {s:?}")))?);
+                        }
+                    }
+                }
+                let slot = p.opt_u8("slot")?;
+                let brightness = p.opt_u8("brightness")?;
+                self.with_keyboard(|kb| {
+                    let slot = slot.unwrap_or_else(|| kb.default_rgb_slot());
+                    kb.write_rgb_profile_with(&frame, brightness, slot)?;
+                    Ok(json!({"ok": true, "slot": slot}))
                 }).map_err(Into::into)
             }
             "rgb.save" => {

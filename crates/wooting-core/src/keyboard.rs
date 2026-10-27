@@ -322,6 +322,13 @@ impl Keyboard {
     /// slot) commits that RAM into the slot. Saving without first sending
     /// rows therefore copies the active profile's colours into the slot.
     pub fn write_rgb_profile(&self, frame: &Frame, slot: u8) -> Result<()> {
+        self.write_rgb_profile_with(frame, None, slot)
+    }
+
+    /// Like [`write_rgb_profile`](Self::write_rgb_profile) but also sets the
+    /// stored brightness in the same commit. SaveRgbProfile copies the whole
+    /// RGB RAM (rows and core) into the slot, so both must be staged first.
+    pub fn write_rgb_profile_with(&self, frame: &Frame, brightness: Option<u8>, slot: u8) -> Result<()> {
         let rows = |range: std::ops::Range<usize>| pb::RgbRows {
             rows: range
                 .map(|r| pb::rgb_rows::Row {
@@ -331,6 +338,16 @@ impl Keyboard {
         };
         self.report_pb(report::kind::RGB_PROFILE_COLORS_PART1, FLAGS_RAM, &rows(0..3))?;
         self.report_pb(report::kind::RGB_PROFILE_COLORS_PART2, FLAGS_RAM, &rows(3..6))?;
+        if let Some(b) = brightness {
+            let mut core: pb::RgbProfileCore = self.cmd_pb(Command::GetRgbProfileCore, [0, 0, 0, slot])?;
+            let p = core.payload.get_or_insert_with(|| pb::rgb_profile_core::Payload {
+                a: Some(0xFFFF),
+                b: Some(0xFFFF),
+                ..Default::default()
+            });
+            p.brightness = Some(b as u32);
+            self.report_pb(report::kind::RGB_PROFILE_CORE, FLAGS_RAM, &core)?;
+        }
         self.cmd(Command::SaveRgbProfile, [0, 0, 0, slot])?;
         self.refresh_rgb();
         Ok(())
