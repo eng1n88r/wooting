@@ -1,8 +1,9 @@
-//! Wooting desktop app: lighting, profiles, key map and settings.
+//! Wooting desktop app: Wootility-style sidebar, profile bar, keyboard view.
 
+mod app;
 mod backend;
 mod keyboard_view;
-mod window;
+mod pages;
 
 use adw::prelude::*;
 
@@ -17,7 +18,7 @@ fn main() -> gtk::glib::ExitCode {
         .init();
     let app = adw::Application::builder().application_id(APP_ID).build();
     app.connect_activate(|app| {
-        let win = window::build(app);
+        let win = app::build(app);
         win.present();
     });
     app.run()

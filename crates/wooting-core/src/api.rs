@@ -226,6 +226,9 @@ impl Api {
     pub fn call(&self, method: &str, params: Value) -> ApiResult {
         let p = Params(params);
         let persist = p.bool("persist").unwrap_or(true);
+        if !persist {
+            tracing::info!(method, params = %p.0, "draft edit");
+        }
         let slot = p.opt_u8("slot")?;
         match method {
             // ----- device ---------------------------------------------------
